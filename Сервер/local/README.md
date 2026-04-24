@@ -3,7 +3,7 @@
 Работает без интернета на Ollama. Рекомендуемая модель 2026 года — **qwen3:30b-a3b**
 (MoE, 15–25 tok/s на 32 ядрах).
 
-Полное руководство: [`../docs/LOCAL_MODEL.md`](../docs/LOCAL_MODEL.md).
+Полное руководство: [`../Инструкции/LOCAL_MODEL.md`](../Инструкции/LOCAL_MODEL.md).
 
 ## TL;DR
 
@@ -33,7 +33,7 @@ curl http://localhost:8000/metrics
 - `MODEL_NAME` — имя модели Ollama (`qwen3:30b-a3b`, `qwen2.5:32b`, `gemma3:27b`, …)
 - `NUM_THREADS` — потоков CPU (на 32 ядрах ставим 28, оставляем 4 ядра ОС)
 - `RAG_ENABLED` — `true/false`, включить обогащение промта выдержками из ведомственных документов
-- `LOG_LEVEL`, `LOG_RETENTION_DAYS`, `AUDIT_ENABLED` — см. `../docs/LOGGING.md`
+- `LOG_LEVEL`, `LOG_RETENTION_DAYS`, `AUDIT_ENABLED` — см. `../Инструкции/LOGGING.md`
 
 ## Автозапуск (Linux, systemd)
 
@@ -47,18 +47,18 @@ systemctl status ai-suggester
 
 ## RAG (обучение на Гарант / КонсультантПлюс)
 
-Полное руководство: [`../docs/RAG_GUIDE.md`](../docs/RAG_GUIDE.md).
+Полное руководство: [`../Инструкции/RAG_GUIDE.md`](../Инструкции/RAG_GUIDE.md).
 
 Краткая шпаргалка:
 ```bash
 # Из корня репозитория
-python -m shared.rag_cli add  ./data/docs/fz_44.docx --doc-id fz-44 --version 2025-03
-python -m shared.rag_cli list
-python -m shared.rag_cli remove fz-44
-python -m shared.rag_cli search "согласно распоряжения"
-python -m shared.rag_cli ingest-folder ./data/docs
+PYTHONPATH=Сервер python -m shared.rag_cli add  ./data/docs/fz_44.docx --doc-id fz-44 --version 2025-03
+PYTHONPATH=Сервер python -m shared.rag_cli list
+PYTHONPATH=Сервер python -m shared.rag_cli remove fz-44
+PYTHONPATH=Сервер python -m shared.rag_cli search "согласно распоряжения"
+PYTHONPATH=Сервер python -m shared.rag_cli ingest-folder ./data/docs
 ```
 
 ## Траблшутинг
 
-См. [`../docs/TROUBLESHOOTING.md`](../docs/TROUBLESHOOTING.md).
+См. [`../Инструкции/TROUBLESHOOTING.md`](../Инструкции/TROUBLESHOOTING.md).

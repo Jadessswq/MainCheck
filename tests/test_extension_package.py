@@ -6,8 +6,9 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-EXT_DIR = ROOT / "AI_Suggester"
-OXT = ROOT / "AI_Suggester.oxt"
+CLIENT = ROOT / "Клиент"
+EXT_DIR = CLIENT / "AI_Suggester"
+OXT = CLIENT / "AI_Suggester.oxt"
 
 
 def _parse(p: Path) -> ET.Element:
@@ -63,7 +64,7 @@ def test_addons_xcu_has_single_user_toolbar_entry():
 
 
 def test_oxt_artifact_can_be_rebuilt(tmp_path):
-    """Собираем .oxt из AI_Suggester/ и проверяем, что архив валидный."""
+    """Собираем .oxt из Клиент/AI_Suggester/ и проверяем, что архив валидный."""
     out = tmp_path / "AI_Suggester.oxt"
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         for p in EXT_DIR.rglob("*"):
@@ -98,7 +99,7 @@ def test_main_xba_uses_settings_module():
 def test_committed_oxt_is_installable():
     """Собранный артефакт в корне должен быть валидным zip-архивом LibreOffice."""
     if not OXT.exists():
-        pytest.skip("AI_Suggester.oxt ещё не пересобран — пропускаем")
+        pytest.skip("Клиент/AI_Suggester.oxt ещё не пересобран — пропускаем")
     with zipfile.ZipFile(OXT) as z:
         names = z.namelist()
     assert "description.xml" in names

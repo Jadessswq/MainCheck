@@ -42,7 +42,7 @@
 
 ## 2. Включение
 
-В `local_server/.env`:
+В `Сервер/local/.env`:
 
 ```env
 RAG_ENABLED=true
@@ -57,7 +57,7 @@ RAG_EMBED_MODEL=nomic-embed-text
 ollama pull nomic-embed-text
 ```
 
-Перезапустить `local_server` (`start.sh` / `start.bat`).
+Перезапустить `Сервер/local` (`start.sh` / `start.bat`).
 
 ---
 
@@ -67,7 +67,7 @@ ollama pull nomic-embed-text
 
 ### Добавить документ
 ```bash
-python -m shared.rag_cli add ./path/to/fz_44.docx --doc-id fz-44 --version 2024-07
+PYTHONPATH=Сервер python -m shared.rag_cli add ./path/to/fz_44.docx --doc-id fz-44 --version 2024-07
 ```
 
 Поля:
@@ -96,23 +96,23 @@ python -m shared.rag_cli add ./path/to/fz_44.docx --doc-id fz-44 --version 2024-
 ### Заменить документ новой редакцией
 Просто вызвать `add` с тем же `--doc-id` и новой `--version`:
 ```bash
-python -m shared.rag_cli add ./path/to/fz_44_new.docx --doc-id fz-44 --version 2025-03
+PYTHONPATH=Сервер python -m shared.rag_cli add ./path/to/fz_44_new.docx --doc-id fz-44 --version 2025-03
 ```
 Старые чанки автоматически удаляются перед добавлением новых — дублирования не происходит.
 
 ### Посмотреть, что загружено
 ```bash
-python -m shared.rag_cli list
+PYTHONPATH=Сервер python -m shared.rag_cli list
 ```
 
 ### Удалить документ (например, норма отменена)
 ```bash
-python -m shared.rag_cli remove fz-44
+PYTHONPATH=Сервер python -m shared.rag_cli remove fz-44
 ```
 
 ### Проверить качество поиска
 ```bash
-python -m shared.rag_cli search "согласно распоряжения" --top-k 3
+PYTHONPATH=Сервер python -m shared.rag_cli search "согласно распоряжения" --top-k 3
 ```
 
 ### Массовая загрузка из папки
@@ -120,7 +120,7 @@ python -m shared.rag_cli search "согласно распоряжения" --to
 `doc_id` берётся из относительного пути:
 
 ```bash
-python -m shared.rag_cli ingest-folder ./data/docs
+PYTHONPATH=Сервер python -m shared.rag_cli ingest-folder ./data/docs
 ```
 
 ---
@@ -132,7 +132,7 @@ python -m shared.rag_cli ingest-folder ./data/docs
 2. Положить файл в `data/docs/` (или любую другую папку).
 3. Выполнить:
    ```bash
-   python -m shared.rag_cli add data/docs/fz_44.docx --doc-id fz-44 --version 2025-03
+   PYTHONPATH=Сервер python -m shared.rag_cli add data/docs/fz_44.docx --doc-id fz-44 --version 2025-03
    ```
 4. Через минуту (эмбеддинги считаются на CPU, ~1–3 с/чанк на nomic-embed-text) —
    документ доступен модели.
@@ -144,7 +144,7 @@ python -m shared.rag_cli ingest-folder ./data/docs
 
 ### Что делать, когда норма отменена
 ```bash
-python -m shared.rag_cli remove fz-44
+PYTHONPATH=Сервер python -m shared.rag_cli remove fz-44
 ```
 
 ---
@@ -156,7 +156,7 @@ python -m shared.rag_cli remove fz-44
 но поиск по лексическому пересечению работает. Используется в тестах и как fallback.
 
 ```bash
-python -m shared.rag_cli --embedder hashing add file.txt --doc-id test
+PYTHONPATH=Сервер python -m shared.rag_cli --embedder hashing add file.txt --doc-id test
 ```
 
 ---

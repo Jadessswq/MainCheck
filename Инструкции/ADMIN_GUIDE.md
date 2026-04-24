@@ -1,7 +1,7 @@
 # Руководство администратора
 
 > Этот документ — для **администратора проекта**. Сотрудники, которым выдаётся
-> готовый `AI_Suggester.oxt`, не должны видеть и выполнять ничего из описанного ниже.
+> готовый `Клиент/AI_Suggester.oxt`, не должны видеть и выполнять ничего из описанного ниже.
 > Для них сценарий: получили .oxt по почте → установили → нажимают одну кнопку на
 > панели. Точка.
 
@@ -11,7 +11,7 @@
 
 ```
   ┌──────────────┐        ┌──────────────────────┐       ┌───────────────────┐
-  │  Админ       │──────► │  AI_Suggester.oxt    │───► e-mail ───►  Работник │
+  │  Админ       │──────► │  Клиент/AI_Suggester.oxt    │───► e-mail ───►  Работник │
   │  (этот гайд) │ 1 раз  │  (с вшитым URL)      │                 (LibreOffice)
   └──────────────┘        └──────────────────────┘       └───────────────────┘
          │
@@ -32,7 +32,7 @@
 Один файл — одна строка. Откройте любым текстовым редактором:
 
 ```
-AI_Suggester/ai_macro/Settings.xba
+Клиент/AI_Suggester/ai_macro/Settings.xba
 ```
 
 Найдите функцию `GetServerList` и замените URL на адрес вашего корпоративного сервера:
@@ -63,8 +63,8 @@ GetServerList = "http://ai-prime.corp.local:8000/suggest|http://ai-backup.corp.l
 ```bash
 python3 - <<'PY'
 import zipfile, pathlib
-root = pathlib.Path("AI_Suggester")
-out  = pathlib.Path("AI_Suggester.oxt")
+root = pathlib.Path("Клиент/AI_Suggester")
+out  = pathlib.Path("Клиент/AI_Suggester.oxt")
 if out.exists(): out.unlink()
 with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
     for p in sorted(root.rglob("*")):
@@ -77,12 +77,12 @@ PY
 Или одной командой (если установлен `zip`):
 
 ```bash
-cd AI_Suggester && zip -r ../AI_Suggester.oxt . -x "*.DS_Store" && cd ..
+cd Клиент/AI_Suggester && zip -r ../AI_Suggester.oxt . -x "*.DS_Store" && cd ../..
 ```
 
 ### Шаг 3. Проверить на себе
 
-1. Установить собранный `AI_Suggester.oxt` в свой LibreOffice:
+1. Установить собранный `Клиент/AI_Suggester.oxt` в свой LibreOffice:
    **Сервис → Управление расширениями → Добавить → выбрать .oxt**.
 2. Перезапустить LibreOffice.
 3. На панели инструментов появилась **одна кнопка** «AI: Улучшить текст» — именно это увидит сотрудник.
@@ -92,8 +92,8 @@ cd AI_Suggester && zip -r ../AI_Suggester.oxt . -x "*.DS_Store" && cd ..
 
 ### Шаг 4. Раздать работникам
 
-Прикрепить `AI_Suggester.oxt` к письму с короткой инструкцией для сотрудника
-(см. `docs/USER_GUIDE.md`).
+Прикрепить `Клиент/AI_Suggester.oxt` к письму с короткой инструкцией для сотрудника
+(см. `Инструкции/USER_GUIDE.md`).
 
 ---
 
@@ -111,7 +111,7 @@ ollama pull qwen3:30b-a3b
 ollama pull nomic-embed-text    # нужен для RAG
 
 # AI Suggester (из корня репо)
-cd local_server
+cd Сервер/local
 cp .env.example .env
 # отредактировать .env при необходимости (NUM_THREADS и т.д.)
 pip install -r requirements.txt
@@ -134,7 +134,7 @@ curl http://localhost:8000/metrics
 Если у организации нет сервера с 32 ГБ RAM, но есть доступ в интернет:
 
 ```bash
-cd "fastapi_server(2)"
+cd Сервер/cloud
 cp .env.example .env
 # вписать OPENROUTER_API_KEY
 pip install -r requirements.txt
@@ -152,9 +152,9 @@ pip install -r requirements.txt
 # Один раз
 ollama pull nomic-embed-text
 # Положить документы в data/docs/
-python -m shared.rag_cli ingest-folder ./data/docs
+PYTHONPATH=Сервер python -m shared.rag_cli ingest-folder ./data/docs
 
-# В local_server/.env
+# В Сервер/local/.env
 RAG_ENABLED=true
 # Перезапустить сервер
 systemctl restart ai-suggester
@@ -162,12 +162,12 @@ systemctl restart ai-suggester
 
 Обновить редакцию:
 ```bash
-python -m shared.rag_cli add data/docs/fz_44_v2025.docx --doc-id fz-44 --version 2025-03
+PYTHONPATH=Сервер python -m shared.rag_cli add data/docs/fz_44_v2025.docx --doc-id fz-44 --version 2025-03
 ```
 
 Удалить отменённый документ:
 ```bash
-python -m shared.rag_cli remove fz-44
+PYTHONPATH=Сервер python -m shared.rag_cli remove fz-44
 ```
 
 ---
@@ -189,8 +189,8 @@ python -m shared.rag_cli remove fz-44
 
 ## 6. Обновление расширения у сотрудников
 
-1. Внести правки в `AI_Suggester/ai_macro/*.xba` (например, новый URL или настройки).
-2. В `AI_Suggester/description.xml` повысить `version` (1.3.0 → 1.3.1).
+1. Внести правки в `Клиент/AI_Suggester/ai_macro/*.xba` (например, новый URL или настройки).
+2. В `Клиент/AI_Suggester/description.xml` повысить `version` (1.3.0 → 1.3.1).
 3. Пересобрать `.oxt` (Шаг 2 выше).
 4. Разослать по почте с инструкцией: «В LibreOffice: Сервис → Управление расширениями →
    Удалить старое AI Suggester → Добавить новое → Перезапустить».
