@@ -1,0 +1,372 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE script:module PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "module.dtd">
+<script:module xmlns:script="http://openoffice.org/2000/script" script:name="Main" script:language="StarBasic"><![CDATA[
+
+' Список серверов — макрос перебирает их по очереди при ошибке.
+' Первый доступный сервер используется для запроса.
+' Порядок: сначала локальный, затем облачный (или наоборот — по вашему выбору).
+Const SERVER_LIST As String = "http://localhost:8000/suggest"
+Const SEP_CORR    As String = "===CORRECTED==="
+Const SEP_CHANGES As String = "===CHANGES==="
+Const SEP_END     As String = "===END==="
+
+' ═══════════════════════════════════════════════════
+'  ТОЧКА ВХОДА
+' ═══════════════════════════════════════════════════
+Sub AISuggestSelection()
+    On Error GoTo ErrorHandler
+
+    Dim oDoc  As Object : oDoc  = ThisComponent
+    Dim oSels As Object : oSels = oDoc.getCurrentSelection()
+    If IsNull(oSels) Or IsEmpty(oSels) Then
+        MsgBox "Выделите фрагмент текста перед запуском.", 64, "AI Suggester"
+        Exit Sub
+    End If
+
+    Dim oSel  As Object : oSel  = oSels.getByIndex(0)
+    Dim sText As String : sText = oSel.getString()
+    If Trim(sText) = "" Then
+        MsgBox "Выделенный фрагмент пустой.", 64, "AI Suggester"
+        Exit Sub
+    End If
+
+    ' Контекст — 2000 символов до выделения
+    Dim oCur As Object : oCur = oDoc.Text.createTextCursorByRange(oSel)
+    oCur.gotoStart(True)
+    Dim sCtx As String : sCtx = Right(oCur.getString(), 2000)
+
+    ' Временные файлы
+    Dim oPS  As Object : oPS = CreateUnoService("com.sun.star.util.PathSettings")
+    Dim sTmp As String : sTmp = ConvertFromURL(oPS.Temp)
+    Dim sSep As String : sSep = IIf(GetGUIType() = 1, "\", "/")
+    Dim sT As String : sT = sTmp & sSep & "ai_input.txt"
+    Dim sC As String : sC = sTmp & sSep & "ai_ctx.txt"
+    Dim sO As String : sO = sTmp & sSep & "ai_output.txt"
+
+    WriteUTF8 sT, sText
+    WriteUTF8 sC, sCtx
+    If FileExists(sO) Then Kill sO
+
+    ' Перебираем серверы из SERVER_LIST (разделитель |)
+    Dim aServers() As String : aServers = Split(SERVER_LIST, "|")
+    Dim sRaw As String : sRaw = ""
+    Dim sLastErr As String : sLastErr = ""
+    Dim bGotResponse As Boolean : bGotResponse = False
+    Dim iSrv As Integer
+    For iSrv = 0 To UBound(aServers)
+        Dim sUrl As String : sUrl = Trim(aServers(iSrv))
+        If sUrl = "" Then GoTo NextServer
+
+        If FileExists(sO) Then Kill sO
+
+        Dim sCmd As String
+        If GetGUIType() = 1 Then
+            sCmd = "/c curl.exe -s --max-time 90 -F ""text=@" & sT & """ -F ""context=@" & sC & """ " & sUrl & " -o """ & sO & """"
+            Shell "cmd.exe", 1, sCmd, True
+        Else
+            sCmd = "curl -s --max-time 90 -F 'text=@" & sT & "' -F 'context=@" & sC & "' " & sUrl & " -o '" & sO & "'"
+            Shell "sh", 1, "-c """ & sCmd & """", True
+        End If
+
+        If Not FileExists(sO) Then
+            sLastErr = "Сервер " & sUrl & " не отвечает (нет файла ответа)"
+            GoTo NextServer
+        End If
+
+        sRaw = Trim(ReadUTF8(sO))
+        If sRaw = "" Then
+            sLastErr = "Сервер " & sUrl & " вернул пустой ответ"
+            GoTo NextServer
+        End If
+
+        ' Ответ получен — проверяем на ошибку сервера
+        If Left(sRaw, 6) = "ОШИБКА" Then
+            sLastErr = "Сервер " & sUrl & ": " & sRaw
+            GoTo NextServer
+        End If
+
+        ' Успех
+        bGotResponse = True
+        Exit For
+
+        NextServer:
+    Next iSrv
+
+    If Not bGotResponse Then
+        Dim sErrMsg As String
+        sErrMsg = "Все серверы недоступны." & Chr(10) & Chr(10) & _
+                  "Последняя ошибка:" & Chr(10) & sLastErr & Chr(10) & Chr(10) & _
+                  "Серверы из списка:" & Chr(10) & Join(aServers, Chr(10)) & Chr(10) & Chr(10) & _
+                  "Повторить попытку?"
+        If MsgBox(sErrMsg, 5+16, "AI Suggester") = 4 Then Call AISuggestSelection
+        Exit Sub
+    End If
+
+    ' Парсинг ответа
+    Dim sCorrected As String
+    Dim aChanges(60) As String
+    Dim nChanges As Integer
+
+    If Not ParseResponse(sRaw, sCorrected, aChanges(), nChanges) Then
+        sCorrected = sRaw
+        aChanges(0) = "Список изменений недоступен"
+        nChanges = 1
+    End If
+
+    ' Построить панели diff — только изменённые фрагменты
+    Dim sBeforePanel As String
+    Dim sAfterPanel  As String
+    BuildDiffPanels aChanges(), nChanges, sBeforePanel, sAfterPanel
+
+    ' Показать диалог
+    If ShowDiffDialog(sBeforePanel, sAfterPanel, aChanges(), nChanges) Then
+        oSel.setString(sCorrected)
+    End If
+
+    Exit Sub
+ErrorHandler:
+    MsgBox "Ошибка макроса (#" & Err & "): " & Error & Chr(10) & "Строка: " & Erl, 16, "AI Suggester"
+End Sub
+
+
+' ═══════════════════════════════════════════════════
+'  ПАРСИНГ ОТВЕТА СЕРВЕРА
+' ═══════════════════════════════════════════════════
+Function ParseResponse(sRaw As String, sCorrected As String, aChanges() As String, nChanges As Integer) As Boolean
+    Dim nP1 As Long : nP1 = InStr(sRaw, SEP_CORR)
+    Dim nP2 As Long : nP2 = InStr(sRaw, SEP_CHANGES)
+    Dim nP3 As Long : nP3 = InStr(sRaw, SEP_END)
+    If nP1 = 0 Or nP2 = 0 Then ParseResponse = False : Exit Function
+
+    sCorrected = Trim(Mid(sRaw, nP1 + Len(SEP_CORR), nP2 - nP1 - Len(SEP_CORR)))
+
+    Dim sChangeSec As String
+    If nP3 > 0 Then
+        sChangeSec = Trim(Mid(sRaw, nP2 + Len(SEP_CHANGES), nP3 - nP2 - Len(SEP_CHANGES)))
+    Else
+        sChangeSec = Trim(Mid(sRaw, nP2 + Len(SEP_CHANGES)))
+    End If
+
+    Dim aLines() As String : aLines = Split(sChangeSec, Chr(10))
+    nChanges = 0
+    Dim i As Integer
+    For i = 0 To UBound(aLines)
+        Dim sLine As String : sLine = Trim(aLines(i))
+        If Right(sLine, 1) = Chr(13) Then sLine = Left(sLine, Len(sLine) - 1)
+        If sLine <> "" And Left(sLine, 3) <> "===" Then
+            aChanges(nChanges) = sLine
+            nChanges = nChanges + 1
+            If nChanges >= 60 Then Exit For
+        End If
+    Next i
+
+    If nChanges = 0 Then aChanges(0) = "Ошибок не найдено." : nChanges = 1
+    ParseResponse = True
+End Function
+
+
+' ═══════════════════════════════════════════════════
+'  ИЗВЛЕЧЕНИЕ ФРАГМЕНТОВ ДО/ПОСЛЕ ИЗ СПИСКА ИЗМЕНЕНИЙ
+'  Строит содержимое для двух верхних панелей диалога
+' ═══════════════════════════════════════════════════
+Sub BuildDiffPanels(aChanges() As String, nChanges As Integer, sBefore As String, sAfter As String)
+    sBefore = ""
+    sAfter  = ""
+    Dim i As Integer
+    For i = 0 To nChanges - 1
+        Dim sLine As String : sLine = aChanges(i)
+
+        ' Извлекаем «было» и «стало» из строки вида: N. «было» → «стало» | причина
+        Dim sB As String : sB = ExtractBetweenGuillemets(sLine, 1)
+        Dim sA As String : sA = ExtractBetweenGuillemets(sLine, 2)
+
+        If sB <> "" Or sA <> "" Then
+            ' Номер пункта
+            Dim sN As String : sN = ""
+            Dim nDot As Integer : nDot = InStr(sLine, ".")
+            If nDot > 0 And nDot <= 3 Then sN = Left(sLine, nDot) & " "
+
+            sBefore = sBefore & sN & IIf(sB <> "", sB, "—") & Chr(10)
+            sAfter  = sAfter  & sN & IIf(sA <> "", sA, "—") & Chr(10)
+        End If
+    Next i
+
+    ' Если ничего не извлеклось — показать что изменений нет
+    If Trim(sBefore) = "" Then
+        sBefore = "(нет изменений)"
+        sAfter  = "(нет изменений)"
+    End If
+End Sub
+
+
+' Извлечь текст из N-й пары «...» в строке (1 = первая, 2 = вторая)
+Function ExtractBetweenGuillemets(sLine As String, nPair As Integer) As String
+    ExtractBetweenGuillemets = ""
+    Dim nOpen As Long : nOpen = 1
+    Dim nFound As Integer : nFound = 0
+    Do
+        nOpen = InStr(nOpen, sLine, Chr(171))
+        If nOpen = 0 Then Exit Function
+        Dim nClose As Long : nClose = InStr(nOpen + 1, sLine, Chr(187))
+        If nClose = 0 Then Exit Function
+        nFound = nFound + 1
+        If nFound = nPair Then
+            ExtractBetweenGuillemets = Mid(sLine, nOpen + 1, nClose - nOpen - 1)
+            Exit Function
+        End If
+        nOpen = nClose + 1
+    Loop
+End Function
+
+
+' ═══════════════════════════════════════════════════
+'  ДИАЛОГ С DIFF-ОТОБРАЖЕНИЕМ
+' ═══════════════════════════════════════════════════
+Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, aChanges() As String, nChanges As Integer) As Boolean
+    ShowDiffDialog = False
+    On Error GoTo DlgErr
+
+    Dim oMdl As Object : oMdl = CreateUnoService("com.sun.star.awt.UnoControlDialogModel")
+    Dim nW As Integer : nW = 340
+    Dim nH As Integer : nH = 252
+    With oMdl
+        .Width = nW : .Height = nH
+        .Title = "AI Suggester — Предложение по улучшению текста"
+        .Closeable = True : .Moveable = True : .Sizeable = False
+    End With
+
+    ' ── Шапка ─────────────────────────────────────
+    Dim oHdr As Object : oHdr = oMdl.createInstance("com.sun.star.awt.UnoControlFixedTextModel")
+    With oHdr
+        .PositionX = 0 : .PositionY = 0 : .Width = nW : .Height = 14
+        .Label = "  Найденные ошибки и их исправления. Проверьте и примите решение."
+        .BackgroundColor = RGB(17, 78, 140) : .TextColor = RGB(255, 255, 255)
+        .FontWeight = com.sun.star.awt.FontWeight.BOLD : .FontHeight = 11
+    End With
+    oMdl.insertByName("hdr", oHdr)
+
+    ' ── Метка: Было ───────────────────────────────
+    Dim oL1 As Object : oL1 = oMdl.createInstance("com.sun.star.awt.UnoControlFixedTextModel")
+    With oL1
+        .PositionX = 6 : .PositionY = 17 : .Width = 158 : .Height = 9
+        .Label = "  Исходные фрагменты с ошибками:"
+        .BackgroundColor = RGB(255, 235, 220) : .TextColor = RGB(140, 40, 0)
+        .FontWeight = com.sun.star.awt.FontWeight.BOLD : .FontHeight = 11
+    End With
+    oMdl.insertByName("l1", oL1)
+
+    ' ── Метка: Стало ──────────────────────────────
+    Dim oL2 As Object : oL2 = oMdl.createInstance("com.sun.star.awt.UnoControlFixedTextModel")
+    With oL2
+        .PositionX = 172 : .PositionY = 17 : .Width = 162 : .Height = 9
+        .Label = "  Исправленные фрагменты:"
+        .BackgroundColor = RGB(220, 245, 220) : .TextColor = RGB(0, 100, 0)
+        .FontWeight = com.sun.star.awt.FontWeight.BOLD : .FontHeight = 11
+    End With
+    oMdl.insertByName("l2", oL2)
+
+    ' ── Поле: Было ────────────────────────────────
+    Dim oT1 As Object : oT1 = oMdl.createInstance("com.sun.star.awt.UnoControlEditModel")
+    With oT1
+        .PositionX = 6 : .PositionY = 27 : .Width = 158 : .Height = 72
+        .MultiLine = True : .ReadOnly = True : .VScroll = True : .HScroll = False
+        .Text = sBeforePanel
+        .Border = 1 : .BackgroundColor = RGB(255, 246, 238) : .FontHeight = 14
+    End With
+    oMdl.insertByName("t1", oT1)
+
+    ' ── Поле: Стало ───────────────────────────────
+    Dim oT2 As Object : oT2 = oMdl.createInstance("com.sun.star.awt.UnoControlEditModel")
+    With oT2
+        .PositionX = 172 : .PositionY = 27 : .Width = 162 : .Height = 72
+        .MultiLine = True : .ReadOnly = True : .VScroll = True : .HScroll = False
+        .Text = sAfterPanel
+        .Border = 1 : .BackgroundColor = RGB(238, 255, 238) : .FontHeight = 14
+    End With
+    oMdl.insertByName("t2", oT2)
+
+    ' ── Разделитель ───────────────────────────────
+    Dim oSep As Object : oSep = oMdl.createInstance("com.sun.star.awt.UnoControlFixedLineModel")
+    With oSep
+        .PositionX = 6 : .PositionY = 102 : .Width = 328 : .Height = 10
+        .Label = "Пояснения к каждому исправлению:"
+    End With
+    oMdl.insertByName("sep", oSep)
+
+    ' ── Поле пояснений (MultiLine, перенос строк) ─
+    Dim oLst As Object : oLst = oMdl.createInstance("com.sun.star.awt.UnoControlEditModel")
+    With oLst
+        .PositionX = 6 : .PositionY = 113 : .Width = 328 : .Height = 96
+        .MultiLine = True : .ReadOnly = True : .VScroll = True : .HScroll = False
+        .Border = 1 : .BackgroundColor = RGB(250, 250, 255)
+        .FontHeight = 14 : .FontName = "Courier New"
+    End With
+    Dim sChangesText As String : sChangesText = ""
+    Dim i As Integer
+    For i = 0 To nChanges - 1
+        If Trim(aChanges(i)) <> "" Then sChangesText = sChangesText & aChanges(i) & Chr(10)
+    Next i
+    oLst.Text = Trim(sChangesText)
+    oMdl.insertByName("lst", oLst)
+
+    ' ── Счётчик ───────────────────────────────────
+    Dim oCnt As Object : oCnt = oMdl.createInstance("com.sun.star.awt.UnoControlFixedTextModel")
+    With oCnt
+        .PositionX = 6 : .PositionY = 212 : .Width = 140 : .Height = 9
+        .Label = "Исправлений: " & CStr(nChanges) : .TextColor = RGB(80, 80, 80) : .FontHeight = 11
+    End With
+    oMdl.insertByName("cnt", oCnt)
+
+    ' ── Кнопки ────────────────────────────────────
+    Dim oBtnOk As Object : oBtnOk = oMdl.createInstance("com.sun.star.awt.UnoControlButtonModel")
+    With oBtnOk
+        .PositionX = 186 : .PositionY = 209 : .Width = 70 : .Height = 15
+        .Label = "✓  Применить" : .PushButtonType = com.sun.star.awt.PushButtonType.OK
+        .DefaultButton = True : .BackgroundColor = RGB(0, 110, 0) : .TextColor = RGB(255,255,255)
+        .FontWeight = com.sun.star.awt.FontWeight.BOLD : .FontHeight = 11
+    End With
+    oMdl.insertByName("btnOk", oBtnOk)
+
+    Dim oBtnCan As Object : oBtnCan = oMdl.createInstance("com.sun.star.awt.UnoControlButtonModel")
+    With oBtnCan
+        .PositionX = 264 : .PositionY = 209 : .Width = 70 : .Height = 15
+        .Label = "✗  Отклонить" : .PushButtonType = com.sun.star.awt.PushButtonType.CANCEL
+        .BackgroundColor = RGB(160, 0, 0) : .TextColor = RGB(255,255,255) : .FontHeight = 11
+    End With
+    oMdl.insertByName("btnCan", oBtnCan)
+
+    ' ── Запустить ─────────────────────────────────
+    Dim oDlg As Object : oDlg = CreateUnoService("com.sun.star.awt.UnoControlDialog")
+    oDlg.setModel(oMdl)
+    Dim oTk As Object : oTk = CreateUnoService("com.sun.star.awt.Toolkit")
+    oDlg.createPeer(oTk, StarDesktop.getCurrentFrame().getContainerWindow())
+    Dim nRes As Integer : nRes = oDlg.execute()
+    oDlg.dispose()
+    ShowDiffDialog = (nRes = 1)
+    Exit Function
+DlgErr:
+    MsgBox "Ошибка диалога (#" & Err & "): " & Error, 16, "AI Suggester"
+End Function
+
+
+' ═══════════════════════════════════════════════════
+'  I/O
+' ═══════════════════════════════════════════════════
+Sub WriteUTF8(sPath As String, sText As String)
+    Dim oSFA  As Object : oSFA  = CreateUnoService("com.sun.star.ucb.SimpleFileAccess")
+    Dim oPipe As Object : oPipe = CreateUnoService("com.sun.star.io.Pipe")
+    Dim oOut  As Object : oOut  = CreateUnoService("com.sun.star.io.TextOutputStream")
+    oOut.setOutputStream(oPipe) : oOut.setEncoding("UTF-8") : oOut.writeString(sText) : oOut.closeOutput()
+    oSFA.writeFile(ConvertToURL(sPath), oPipe)
+End Sub
+
+Function ReadUTF8(sPath As String) As String
+    Dim oSFA As Object : oSFA = CreateUnoService("com.sun.star.ucb.SimpleFileAccess")
+    Dim oIn  As Object : oIn  = CreateUnoService("com.sun.star.io.TextInputStream")
+    oIn.setInputStream(oSFA.openFileRead(ConvertToURL(sPath))) : oIn.setEncoding("UTF-8")
+    Dim r As String : r = ""
+    Do While Not oIn.isEOF() : r = r & oIn.readLine() & Chr(10) : Loop
+    oIn.closeInput() : ReadUTF8 = r
+End Function
+
+]]></script:module>
