@@ -1,137 +1,64 @@
 # AI LibreOffice Suggester — Локальный сервер
 
-## Рекомендуемая модель для вашего сервера
+Работает без интернета на Ollama. Рекомендуемая модель 2026 года — **qwen3:30b-a3b**
+(MoE, 15–25 tok/s на 32 ядрах).
 
-**Конфигурация сервера:** 500 GB хранилище · 32 GB RAM · 32 ядра CPU · без GPU
+Полное руководство: [`../docs/LOCAL_MODEL.md`](../docs/LOCAL_MODEL.md).
 
-### Выбор модели
+## TL;DR
 
-| Модель | RAM | Скорость | Качество | Команда загрузки |
-|--------|-----|----------|----------|-----------------|
-| **qwen2.5:32b** ⭐ рекомендуется | ~22 GB | ~3–5 tok/s | Отличное | `ollama pull qwen2.5:32b` |
-| qwen2.5:14b | ~10 GB | ~8–12 tok/s | Хорошее | `ollama pull qwen2.5:14b` |
-| mistral-small3.1:22b | ~14 GB | ~6–9 tok/s | Хорошее | `ollama pull mistral-small3.1:22b` |
-
-**Рекомендация: qwen2.5:32b**
-- Лучшее понимание русского языка среди open-source моделей
-- Квантизация Q4_K_M (используется по умолчанию в Ollama)
-- Умещается в 32 GB RAM с запасом (~22 GB модель + ~4 GB система)
-- На 28 ядрах даёт 3–5 токенов/сек (короткий текст — 15–30 сек)
-
----
-
-## Установка (Windows)
-
-### 1. Установить Ollama
-Скачать установщик: https://ollama.com/download/windows
-
-Проверить установку:
-```
-ollama --version
-```
-
-### 2. Загрузить модель
-```
-ollama pull qwen2.5:32b
-```
-Размер загрузки: ~19 GB. Прогресс отображается в консоли.
-
-### 3. Запустить Ollama (если не запустился автоматически)
-```
-ollama serve
-```
-
-### 4. Установить зависимости Python и запустить сервер
-```
-pip install -r requirements.txt
-start.bat
-```
-
-### 5. Проверить работу
-Открыть в браузере: http://localhost:8000/health
-
-Ожидаемый ответ:
-```
-Ollama OK | Модель qwen2.5:32b загружена
-```
-
----
-
-## Установка (Linux / Astra Linux)
-
-### 1. Установить Ollama
 ```bash
+# Ollama + модель
 curl -fsSL https://ollama.com/install.sh | sh
-```
+ollama pull qwen3:30b-a3b
+ollama pull nomic-embed-text   # для RAG
 
-Или без прав root (в домашнюю директорию):
-```bash
-curl -L https://ollama.com/download/ollama-linux-amd64 -o ~/ollama
-chmod +x ~/ollama
-~/ollama serve &
-```
-
-### 2. Загрузить модель
-```bash
-ollama pull qwen2.5:32b
-```
-
-### 3. Запустить сервер
-```bash
+# Сервер
+cp .env.example .env           # при необходимости правим
 pip install -r requirements.txt
-./start.sh
+./start.sh                     # Linux
+# или start.bat                # Windows
 ```
 
-### 4. Автозапуск через systemd (опционально)
+Проверка:
 ```bash
-# Отредактировать ai-suggester.service: заменить YOUR_USERNAME на ваш логин
-# и путь /opt/ai-suggester на реальный путь к файлам сервера
+curl http://localhost:8000/health
+curl http://localhost:8000/metrics
+```
+
+## Переменные окружения
+
+Все параметры — в `.env.example`. Основные:
+
+- `MODEL_NAME` — имя модели Ollama (`qwen3:30b-a3b`, `qwen2.5:32b`, `gemma3:27b`, …)
+- `NUM_THREADS` — потоков CPU (на 32 ядрах ставим 28, оставляем 4 ядра ОС)
+- `RAG_ENABLED` — `true/false`, включить обогащение промта выдержками из ведомственных документов
+- `LOG_LEVEL`, `LOG_RETENTION_DAYS`, `AUDIT_ENABLED` — см. `../docs/LOGGING.md`
+
+## Автозапуск (Linux, systemd)
+
+```bash
+# Отредактировать ai-suggester.service: заменить YOUR_USERNAME и путь
 sudo cp ai-suggester.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable ai-suggester
-sudo systemctl start ai-suggester
+sudo systemctl enable --now ai-suggester
+systemctl status ai-suggester
 ```
 
----
+## RAG (обучение на Гарант / КонсультантПлюс)
 
-## Настройка (.env)
+Полное руководство: [`../docs/RAG_GUIDE.md`](../docs/RAG_GUIDE.md).
 
-```env
-OLLAMA_URL=http://localhost:11434   # URL Ollama
-MODEL_NAME=qwen2.5:32b              # Имя модели
-NUM_THREADS=28                      # Потоков CPU (оставить 4 для ОС)
-```
-
-Чтобы переключиться на более быструю (но менее качественную) модель:
-```env
-MODEL_NAME=qwen2.5:14b
-NUM_THREADS=28
-```
-
----
-
-## Решение проблем
-
-**Ollama не запускается:**
+Краткая шпаргалка:
 ```bash
-# Проверить, не занят ли порт
-netstat -an | findstr 11434    # Windows
-ss -tlnp | grep 11434          # Linux
+# Из корня репозитория
+python -m shared.rag_cli add  ./data/docs/fz_44.docx --doc-id fz-44 --version 2025-03
+python -m shared.rag_cli list
+python -m shared.rag_cli remove fz-44
+python -m shared.rag_cli search "согласно распоряжения"
+python -m shared.rag_cli ingest-folder ./data/docs
 ```
 
-**Модель не найдена:**
-```bash
-ollama list    # Показать загруженные модели
-ollama pull qwen2.5:32b
-```
+## Траблшутинг
 
-**Мало памяти / сервер зависает:**
-Переключитесь на модель меньшего размера в `.env`:
-```env
-MODEL_NAME=qwen2.5:14b
-```
-
-**Медленная генерация:**
-Это нормально для CPU-инференса. qwen2.5:32b на 28 ядрах:
-- Короткий текст (100–300 слов): 15–40 секунд
-- Средний текст (500–1000 слов): 1–3 минуты
+См. [`../docs/TROUBLESHOOTING.md`](../docs/TROUBLESHOOTING.md).

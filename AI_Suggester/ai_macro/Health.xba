@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE script:module PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "module.dtd">
+<script:module xmlns:script="http://openoffice.org/2000/script" script:name="Health" script:language="StarBasic"><![CDATA[
+' ═══════════════════════════════════════════════════
+'  ПРОВЕРКА СЕРВЕРОВ (/health для каждого адреса из SERVER_LIST)
+' ═══════════════════════════════════════════════════
+Sub AICheckServer()
+    On Error GoTo ErrHandler
+
+    Dim sUrls As String : sUrls = Settings.GetHealthList()
+    Dim aUrls() As String : aUrls = Split(sUrls, "|")
+
+    Dim oPS  As Object : oPS = CreateUnoService("com.sun.star.util.PathSettings")
+    Dim sTmp As String : sTmp = ConvertFromURL(oPS.Temp)
+    Dim sSep As String : sSep = IIf(GetGUIType() = 1, "\", "/")
+    Dim sOut As String : sOut = sTmp & sSep & "ai_health.txt"
+    Dim sStatusFile As String : sStatusFile = sTmp & sSep & "ai_health_status.txt"
+
+    Dim sReport As String : sReport = ""
+    Dim i As Integer
+    For i = 0 To UBound(aUrls)
+        Dim sUrl As String : sUrl = Trim(aUrls(i))
+        If sUrl = "" Then GoTo NextUrl
+
+        If FileExists(sOut) Then Kill sOut
+        If FileExists(sStatusFile) Then Kill sStatusFile
+
+        Dim sCmd As String
+        If GetGUIType() = 1 Then
+            sCmd = "/c curl.exe -s --max-time 10 -o """ & sOut & """ -w ""%{http_code}"" " & sUrl & " > """ & sStatusFile & """"
+            Shell "cmd.exe", 1, sCmd, True
+        Else
+            sCmd = "curl -s --max-time 10 -o '" & sOut & "' -w '%{http_code}' " & sUrl & " > '" & sStatusFile & "'"
+            Shell "/bin/sh", 1, "-c " & Chr(34) & sCmd & Chr(34), True
+        End If
+
+        Dim sHttp As String : sHttp = "???"
+        If FileExists(sStatusFile) Then sHttp = Trim(Main.ReadUTF8(sStatusFile))
+
+        Dim sBody As String : sBody = ""
+        If FileExists(sOut) Then sBody = Trim(Main.ReadUTF8(sOut))
+
+        sReport = sReport & "[ " & sHttp & " ]  " & sUrl & Chr(10)
+        If sBody <> "" Then sReport = sReport & "    → " & Left(sBody, 200) & Chr(10)
+        sReport = sReport & Chr(10)
+
+        NextUrl:
+    Next i
+
+    If Trim(sReport) = "" Then sReport = "Список серверов пуст. Проверьте модуль Settings."
+    MsgBox sReport, 64, "AI Suggester — Проверка серверов"
+    Exit Sub
+ErrHandler:
+    MsgBox "Ошибка проверки (#" & Err & "): " & Error, 16, "AI Suggester"
+End Sub
+
+]]></script:module>

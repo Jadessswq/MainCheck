@@ -1,7 +1,26 @@
-import os, httpx
-from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import PlainTextResponse
+"""
+Облачный сервер AI LibreOffice Suggester (OpenRouter free tier).
+
+Новое в v1.3:
+    • Логи с ротацией и retention
+    • SQLite-аудит запросов (/metrics)
+"""
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+import httpx
 from dotenv import load_dotenv
+from fastapi import FastAPI, File, Request, UploadFile
+from fastapi.responses import JSONResponse, PlainTextResponse
+
+_HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(_HERE.parent))
+
+from shared.audit import AuditStore, Timer, count_changes  # noqa: E402
+from shared.logging_setup import setup_logger  # noqa: E402
 
 load_dotenv()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
@@ -14,9 +33,9 @@ MODELS = [
     "nvidia/llama-3.1-nemotron-nano-8b-v1:free",
 ]
 
-# ══════════════════════════════════════════════════════════════
-#  СИСТЕМНЫЙ ПРОМТ  (Chain-of-Thought + Few-Shot + строгие правила)
-# ══════════════════════════════════════════════════════════════
+logger = setup_logger("ai_suggester.cloud")
+audit = AuditStore()
+
 SYSTEM_PROMPT = """Вы — опытный корректор русского языка. Исправляйте ТОЛЬКО реальные языковые ошибки.
 
 ━━━ ШАГ 1: МЫСЛЕННЫЙ АНАЛИЗ (не выводить) ━━━
@@ -47,7 +66,6 @@ SYSTEM_PROMPT = """Вы — опытный корректор русского �
 • Структуру и смысл — не менять
 
 ━━━ ПРИМЕРЫ (few-shot) ━━━
-
 ВХОД: «повысился в Уральском на 300%, Сибирском на 100% и Приволжском на 43% округах»
 ВЫХОД (CHANGES): 1. «Уральском на 300%, Сибирском на 100% и Приволжском на 43% округах» → «Уральском (300%), Сибирском (100%) и Приволжском (43%) округах» | несогласованная вставка числовых данных внутри однородного ряда прилагательных
 
@@ -72,7 +90,11 @@ SYSTEM_PROMPT = """Вы — опытный корректор русского �
 - Если ошибок нет: 1. Ошибок не найдено. Текст соответствует нормам.
 - Никакого текста вне блоков ==="""
 
-app = FastAPI(title="AI LibreOffice Suggester")
+app = FastAPI(title="AI LibreOffice Suggester — Cloud", version="1.3.0")
+
+
+def _key_missing() -> bool:
+    return not OPENROUTER_API_KEY or "ваш_ключ" in OPENROUTER_API_KEY.lower()
 
 
 async def call_model(messages: list, model: str) -> str:
@@ -94,8 +116,7 @@ async def call_model(messages: list, model: str) -> str:
 
 @app.get("/health", response_class=PlainTextResponse)
 async def health():
-    """Реальная проверка: ключ задан + хотя бы одна модель отвечает."""
-    if not OPENROUTER_API_KEY or "ваш_ключ" in OPENROUTER_API_KEY:
+    if _key_missing():
         return "ОШИБКА: OPENROUTER_API_KEY не задан в .env"
     probe = [{"role": "user", "content": "Ответь одним словом: OK"}]
     for model in MODELS:
@@ -104,7 +125,7 @@ async def health():
             return f"OK | Работает: {model} | Ответ: {ans[:40]}"
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 429:
-                continue          # rate limit — пробуем следующую
+                continue
             return f"ОШИБКА HTTP {e.response.status_code} на {model}: {e.response.text[:200]}"
         except Exception as e:
             return f"ОШИБКА на {model}: {str(e)[:200]}"
@@ -113,7 +134,7 @@ async def health():
 
 @app.get("/test_api", response_class=PlainTextResponse)
 async def test_api():
-    if not OPENROUTER_API_KEY or "ваш_ключ" in OPENROUTER_API_KEY:
+    if _key_missing():
         return "ОШИБКА: OPENROUTER_API_KEY не задан в .env"
     lines = [f"Ключ: {OPENROUTER_API_KEY[:12]}...{OPENROUTER_API_KEY[-4:]}\n"]
     for model in MODELS:
@@ -126,14 +147,28 @@ async def test_api():
     return "\n".join(lines)
 
 
+@app.get("/metrics")
+async def metrics(hours: int = 24):
+    return JSONResponse({
+        "server": "cloud",
+        "models": MODELS,
+        "audit": audit.stats(hours=hours),
+    })
+
+
 @app.post("/suggest", response_class=PlainTextResponse)
-async def suggest(text: UploadFile = File(...), context: UploadFile = File(...)):
-    if not OPENROUTER_API_KEY or "ваш_ключ" in OPENROUTER_API_KEY:
+async def suggest(
+    request: Request,
+    text: UploadFile = File(...),
+    context: UploadFile = File(...),
+):
+    if _key_missing():
         return "ОШИБКА: OPENROUTER_API_KEY не задан в .env"
 
-    raw_text = (await text.read()).decode("utf-8").strip()
-    raw_ctx  = (await context.read()).decode("utf-8").strip()
-    if not raw_text: return "ОШИБКА: Пустой текст"
+    raw_text = (await text.read()).decode("utf-8", errors="replace").strip()
+    raw_ctx = (await context.read()).decode("utf-8", errors="replace").strip()
+    if not raw_text:
+        return "ОШИБКА: Пустой текст"
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -143,19 +178,52 @@ async def suggest(text: UploadFile = File(...), context: UploadFile = File(...))
         )},
     ]
 
-    last_err = "нет ответа"
-    for model in MODELS:
-        try:
-            result = await call_model(messages, model)
-            if "===CORRECTED===" in result:
-                return result
-            return f"===CORRECTED===\n{result}\n===CHANGES===\n1. Формат ответа не распознан.\n===END==="
-        except httpx.HTTPStatusError as e:
-            last_err = f"[{model}] HTTP {e.response.status_code}"
-            if e.response.status_code in (429, 502, 503): continue
-            return f"ОШИБКА_СЕРВЕРА: {last_err}"
-        except Exception as e:
-            last_err = f"[{model}] {str(e)[:200]}"
-            continue
+    client_ip = request.client.host if request.client else ""
+    user_agent = request.headers.get("user-agent", "")
 
-    return f"ОШИБКА_СЕРВЕРА: Все модели недоступны. {last_err}"
+    last_err = "нет ответа"
+    used_model = ""
+    ok, error, result = False, "", ""
+    timer = Timer()
+    with timer:
+        for model in MODELS:
+            try:
+                result = await call_model(messages, model)
+                used_model = model
+                if "===CORRECTED===" not in result:
+                    result = (
+                        "===CORRECTED===\n"
+                        f"{result}\n"
+                        "===CHANGES===\n"
+                        "1. Формат ответа не распознан — проверьте вручную.\n"
+                        "===END==="
+                    )
+                ok = True
+                break
+            except httpx.HTTPStatusError as e:
+                last_err = f"[{model}] HTTP {e.response.status_code}"
+                if e.response.status_code in (429, 502, 503):
+                    continue
+                error = last_err
+                result = f"ОШИБКА_СЕРВЕРА: {last_err}"
+                break
+            except Exception as e:
+                last_err = f"[{model}] {str(e)[:200]}"
+                continue
+        if not ok and not result:
+            error = last_err
+            result = f"ОШИБКА_СЕРВЕРА: Все модели недоступны. {last_err}"
+
+    audit.record(
+        client_ip=client_ip, user_agent=user_agent,
+        server="cloud", model=used_model or "(none)",
+        text=raw_text, context=raw_ctx,
+        changes_count=count_changes(result),
+        duration_ms=timer.ms, ok=ok, error=error,
+    )
+    logger.info(
+        "suggest ip=%s model=%s len=%d changes=%d ok=%s dur=%dms",
+        client_ip, used_model, len(raw_text),
+        count_changes(result), ok, timer.ms,
+    )
+    return result

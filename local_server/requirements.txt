@@ -3,3 +3,8 @@ uvicorn[standard]>=0.29.0
 httpx>=0.27.0
 python-multipart>=0.0.9
 python-dotenv>=1.0.0
+
+# Для RAG-очистки документов (опционально, но рекомендуется)
+python-docx>=1.1.0
+pypdf>=4.2.0
+beautifulsoup4>=4.12.0

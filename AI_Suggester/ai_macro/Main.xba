@@ -2,10 +2,7 @@
 <!DOCTYPE script:module PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "module.dtd">
 <script:module xmlns:script="http://openoffice.org/2000/script" script:name="Main" script:language="StarBasic"><![CDATA[
 
-' Список серверов — макрос перебирает их по очереди при ошибке.
-' Первый доступный сервер используется для запроса.
-' Порядок: сначала локальный, затем облачный (или наоборот — по вашему выбору).
-Const SERVER_LIST As String = "http://localhost:8000/suggest"
+' Разделители в ответе сервера
 Const SEP_CORR    As String = "===CORRECTED==="
 Const SEP_CHANGES As String = "===CHANGES==="
 Const SEP_END     As String = "===END==="
@@ -30,69 +27,96 @@ Sub AISuggestSelection()
         Exit Sub
     End If
 
-    ' Контекст — 2000 символов до выделения
+    ' Контекст — N символов до выделения (по умолчанию 2000)
     Dim oCur As Object : oCur = oDoc.Text.createTextCursorByRange(oSel)
     oCur.gotoStart(True)
-    Dim sCtx As String : sCtx = Right(oCur.getString(), 2000)
+    Dim sCtx As String : sCtx = Right(oCur.getString(), Settings.GetContextSize())
 
-    ' Временные файлы
+    ' Временные файлы (Temp-папка не требует прав на запись в другие директории)
     Dim oPS  As Object : oPS = CreateUnoService("com.sun.star.util.PathSettings")
     Dim sTmp As String : sTmp = ConvertFromURL(oPS.Temp)
     Dim sSep As String : sSep = IIf(GetGUIType() = 1, "\", "/")
     Dim sT As String : sT = sTmp & sSep & "ai_input.txt"
     Dim sC As String : sC = sTmp & sSep & "ai_ctx.txt"
     Dim sO As String : sO = sTmp & sSep & "ai_output.txt"
+    Dim sS As String : sS = sTmp & sSep & "ai_status.txt"
 
     WriteUTF8 sT, sText
     WriteUTF8 sC, sCtx
     If FileExists(sO) Then Kill sO
+    If FileExists(sS) Then Kill sS
 
-    ' Перебираем серверы из SERVER_LIST (разделитель |)
-    Dim aServers() As String : aServers = Split(SERVER_LIST, "|")
+    ' Перебор серверов из Settings.GetServerList()
+    Dim aServers() As String : aServers = Split(Settings.GetServerList(), "|")
     Dim sRaw As String : sRaw = ""
     Dim sLastErr As String : sLastErr = ""
-    Dim bGotResponse As Boolean : bGotResponse = False
-    Dim iSrv As Integer
+    Dim bGot As Boolean : bGot = False
+    Dim sUsedServer As String : sUsedServer = ""
+    Dim iSrv As Integer, nTimeout As Integer
+    nTimeout = Settings.GetTimeout()
+
     For iSrv = 0 To UBound(aServers)
         Dim sUrl As String : sUrl = Trim(aServers(iSrv))
         If sUrl = "" Then GoTo NextServer
 
         If FileExists(sO) Then Kill sO
+        If FileExists(sS) Then Kill sS
 
         Dim sCmd As String
         If GetGUIType() = 1 Then
-            sCmd = "/c curl.exe -s --max-time 90 -F ""text=@" & sT & """ -F ""context=@" & sC & """ " & sUrl & " -o """ & sO & """"
+            ' Windows: curl + status в отдельный файл
+            sCmd = "/c curl.exe -s --max-time " & CStr(nTimeout) & _
+                   " -F ""text=@" & sT & """ -F ""context=@" & sC & """ " & _
+                   sUrl & " -o """ & sO & """ -w ""%{http_code}"" > """ & sS & """"
             Shell "cmd.exe", 1, sCmd, True
         Else
-            sCmd = "curl -s --max-time 90 -F 'text=@" & sT & "' -F 'context=@" & sC & "' " & sUrl & " -o '" & sO & "'"
-            Shell "sh", 1, "-c """ & sCmd & """", True
+            ' Linux/macOS
+            sCmd = "curl -s --max-time " & CStr(nTimeout) & _
+                   " -F 'text=@" & sT & "' -F 'context=@" & sC & "' " & _
+                   sUrl & " -o '" & sO & "' -w '%{http_code}' > '" & sS & "'"
+            Shell "/bin/sh", 1, "-c " & Chr(34) & sCmd & Chr(34), True
         End If
 
+        ' Проверка HTTP-статуса
+        Dim sHttp As String : sHttp = ""
+        If FileExists(sS) Then sHttp = Trim(ReadUTF8(sS))
+
         If Not FileExists(sO) Then
-            sLastErr = "Сервер " & sUrl & " не отвечает (нет файла ответа)"
+            sLastErr = "Сервер " & sUrl & ": нет ответа (таймаут/сеть)"
             GoTo NextServer
         End If
 
         sRaw = Trim(ReadUTF8(sO))
         If sRaw = "" Then
-            sLastErr = "Сервер " & sUrl & " вернул пустой ответ"
+            sLastErr = "Сервер " & sUrl & ": пустой ответ (HTTP " & sHttp & ")"
             GoTo NextServer
         End If
 
-        ' Ответ получен — проверяем на ошибку сервера
+        ' HTTP != 2xx → пробовать следующий сервер
+        If sHttp <> "" And Left(sHttp, 1) <> "2" Then
+            sLastErr = "Сервер " & sUrl & ": HTTP " & sHttp & " · " & Left(sRaw, 120)
+            GoTo NextServer
+        End If
+
+        ' Сервер вернул маркер ошибки
         If Left(sRaw, 6) = "ОШИБКА" Then
-            sLastErr = "Сервер " & sUrl & ": " & sRaw
+            sLastErr = "Сервер " & sUrl & ": " & Left(sRaw, 200)
             GoTo NextServer
         End If
 
         ' Успех
-        bGotResponse = True
+        bGot = True
+        sUsedServer = sUrl
         Exit For
 
         NextServer:
     Next iSrv
 
-    If Not bGotResponse Then
+    ' Очистка временных файлов запроса (ответ оставим для отладки при ошибке)
+    If FileExists(sT) Then Kill sT
+    If FileExists(sC) Then Kill sC
+
+    If Not bGot Then
         Dim sErrMsg As String
         sErrMsg = "Все серверы недоступны." & Chr(10) & Chr(10) & _
                   "Последняя ошибка:" & Chr(10) & sLastErr & Chr(10) & Chr(10) & _
@@ -102,30 +126,65 @@ Sub AISuggestSelection()
         Exit Sub
     End If
 
-    ' Парсинг ответа
+    ' Double-check: валидность формата ответа
     Dim sCorrected As String
-    Dim aChanges(60) As String
+    Dim nMax As Integer : nMax = Settings.GetMaxChanges()
+    Dim aChanges() As String : ReDim aChanges(nMax)
     Dim nChanges As Integer
 
     If Not ParseResponse(sRaw, sCorrected, aChanges(), nChanges) Then
+        ' Ответ пришёл, но без маркеров — показать как есть, не подменять
         sCorrected = sRaw
-        aChanges(0) = "Список изменений недоступен"
+        aChanges(0) = "Ответ сервера без структурных маркеров — проверка невозможна"
         nChanges = 1
     End If
 
-    ' Построить панели diff — только изменённые фрагменты
+    ' Панели diff
     Dim sBeforePanel As String
     Dim sAfterPanel  As String
     BuildDiffPanels aChanges(), nChanges, sBeforePanel, sAfterPanel
 
-    ' Показать диалог
+    ' Диалог
     If ShowDiffDialog(sBeforePanel, sAfterPanel, aChanges(), nChanges) Then
-        oSel.setString(sCorrected)
+        ApplyCorrection oDoc, oSel, sCorrected
     End If
 
     Exit Sub
 ErrorHandler:
     MsgBox "Ошибка макроса (#" & Err & "): " & Error & Chr(10) & "Строка: " & Erl, 16, "AI Suggester"
+End Sub
+
+
+' ═══════════════════════════════════════════════════
+'  ПРИМЕНЕНИЕ ИСПРАВЛЕНИЯ С УЧЁТОМ TRACK CHANGES
+' ═══════════════════════════════════════════════════
+' Если Settings.GetUseTrackChanges() = True, перед заменой включаем режим
+' «Отслеживать изменения» (RecordChanges). LibreOffice сам формирует
+' redline-блоки (зачёркнутый исходный текст + цветной исправленный),
+' которые пользователь может принять/отклонить по одному через меню
+' «Правка → Отслеживать изменения → Управление».
+Sub ApplyCorrection(oDoc As Object, oSel As Object, sCorrected As String)
+    Dim bPrevRec As Boolean : bPrevRec = False
+    Dim bShouldRestore As Boolean : bShouldRestore = False
+
+    If Settings.GetUseTrackChanges() Then
+        On Error Resume Next
+        bPrevRec = CBool(oDoc.getPropertyValue("RecordChanges"))
+        If Err = 0 Then
+            oDoc.setPropertyValue("RecordChanges", True)
+            bShouldRestore = True
+        End If
+        Err = 0
+        On Error Goto 0
+    End If
+
+    oSel.setString(sCorrected)
+
+    If bShouldRestore Then
+        On Error Resume Next
+        oDoc.setPropertyValue("RecordChanges", bPrevRec)
+        On Error Goto 0
+    End If
 End Sub
 
 
@@ -137,11 +196,12 @@ Function ParseResponse(sRaw As String, sCorrected As String, aChanges() As Strin
     Dim nP2 As Long : nP2 = InStr(sRaw, SEP_CHANGES)
     Dim nP3 As Long : nP3 = InStr(sRaw, SEP_END)
     If nP1 = 0 Or nP2 = 0 Then ParseResponse = False : Exit Function
+    If nP2 <= nP1 Then ParseResponse = False : Exit Function
 
     sCorrected = Trim(Mid(sRaw, nP1 + Len(SEP_CORR), nP2 - nP1 - Len(SEP_CORR)))
 
     Dim sChangeSec As String
-    If nP3 > 0 Then
+    If nP3 > nP2 Then
         sChangeSec = Trim(Mid(sRaw, nP2 + Len(SEP_CHANGES), nP3 - nP2 - Len(SEP_CHANGES)))
     Else
         sChangeSec = Trim(Mid(sRaw, nP2 + Len(SEP_CHANGES)))
@@ -149,6 +209,7 @@ Function ParseResponse(sRaw As String, sCorrected As String, aChanges() As Strin
 
     Dim aLines() As String : aLines = Split(sChangeSec, Chr(10))
     nChanges = 0
+    Dim nMax As Integer : nMax = UBound(aChanges)
     Dim i As Integer
     For i = 0 To UBound(aLines)
         Dim sLine As String : sLine = Trim(aLines(i))
@@ -156,7 +217,7 @@ Function ParseResponse(sRaw As String, sCorrected As String, aChanges() As Strin
         If sLine <> "" And Left(sLine, 3) <> "===" Then
             aChanges(nChanges) = sLine
             nChanges = nChanges + 1
-            If nChanges >= 60 Then Exit For
+            If nChanges >= nMax Then Exit For
         End If
     Next i
 
@@ -167,7 +228,6 @@ End Function
 
 ' ═══════════════════════════════════════════════════
 '  ИЗВЛЕЧЕНИЕ ФРАГМЕНТОВ ДО/ПОСЛЕ ИЗ СПИСКА ИЗМЕНЕНИЙ
-'  Строит содержимое для двух верхних панелей диалога
 ' ═══════════════════════════════════════════════════
 Sub BuildDiffPanels(aChanges() As String, nChanges As Integer, sBefore As String, sAfter As String)
     sBefore = ""
@@ -175,13 +235,10 @@ Sub BuildDiffPanels(aChanges() As String, nChanges As Integer, sBefore As String
     Dim i As Integer
     For i = 0 To nChanges - 1
         Dim sLine As String : sLine = aChanges(i)
-
-        ' Извлекаем «было» и «стало» из строки вида: N. «было» → «стало» | причина
         Dim sB As String : sB = ExtractBetweenGuillemets(sLine, 1)
         Dim sA As String : sA = ExtractBetweenGuillemets(sLine, 2)
 
         If sB <> "" Or sA <> "" Then
-            ' Номер пункта
             Dim sN As String : sN = ""
             Dim nDot As Integer : nDot = InStr(sLine, ".")
             If nDot > 0 And nDot <= 3 Then sN = Left(sLine, nDot) & " "
@@ -191,7 +248,6 @@ Sub BuildDiffPanels(aChanges() As String, nChanges As Integer, sBefore As String
         End If
     Next i
 
-    ' Если ничего не извлеклось — показать что изменений нет
     If Trim(sBefore) = "" Then
         sBefore = "(нет изменений)"
         sAfter  = "(нет изменений)"
@@ -199,7 +255,6 @@ Sub BuildDiffPanels(aChanges() As String, nChanges As Integer, sBefore As String
 End Sub
 
 
-' Извлечь текст из N-й пары «...» в строке (1 = первая, 2 = вторая)
 Function ExtractBetweenGuillemets(sLine As String, nPair As Integer) As String
     ExtractBetweenGuillemets = ""
     Dim nOpen As Long : nOpen = 1
@@ -235,7 +290,6 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, aChanges(
         .Closeable = True : .Moveable = True : .Sizeable = False
     End With
 
-    ' ── Шапка ─────────────────────────────────────
     Dim oHdr As Object : oHdr = oMdl.createInstance("com.sun.star.awt.UnoControlFixedTextModel")
     With oHdr
         .PositionX = 0 : .PositionY = 0 : .Width = nW : .Height = 14
@@ -245,7 +299,6 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, aChanges(
     End With
     oMdl.insertByName("hdr", oHdr)
 
-    ' ── Метка: Было ───────────────────────────────
     Dim oL1 As Object : oL1 = oMdl.createInstance("com.sun.star.awt.UnoControlFixedTextModel")
     With oL1
         .PositionX = 6 : .PositionY = 17 : .Width = 158 : .Height = 9
@@ -255,7 +308,6 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, aChanges(
     End With
     oMdl.insertByName("l1", oL1)
 
-    ' ── Метка: Стало ──────────────────────────────
     Dim oL2 As Object : oL2 = oMdl.createInstance("com.sun.star.awt.UnoControlFixedTextModel")
     With oL2
         .PositionX = 172 : .PositionY = 17 : .Width = 162 : .Height = 9
@@ -265,7 +317,6 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, aChanges(
     End With
     oMdl.insertByName("l2", oL2)
 
-    ' ── Поле: Было ────────────────────────────────
     Dim oT1 As Object : oT1 = oMdl.createInstance("com.sun.star.awt.UnoControlEditModel")
     With oT1
         .PositionX = 6 : .PositionY = 27 : .Width = 158 : .Height = 72
@@ -275,7 +326,6 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, aChanges(
     End With
     oMdl.insertByName("t1", oT1)
 
-    ' ── Поле: Стало ───────────────────────────────
     Dim oT2 As Object : oT2 = oMdl.createInstance("com.sun.star.awt.UnoControlEditModel")
     With oT2
         .PositionX = 172 : .PositionY = 27 : .Width = 162 : .Height = 72
@@ -285,7 +335,6 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, aChanges(
     End With
     oMdl.insertByName("t2", oT2)
 
-    ' ── Разделитель ───────────────────────────────
     Dim oSep As Object : oSep = oMdl.createInstance("com.sun.star.awt.UnoControlFixedLineModel")
     With oSep
         .PositionX = 6 : .PositionY = 102 : .Width = 328 : .Height = 10
@@ -293,7 +342,6 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, aChanges(
     End With
     oMdl.insertByName("sep", oSep)
 
-    ' ── Поле пояснений (MultiLine, перенос строк) ─
     Dim oLst As Object : oLst = oMdl.createInstance("com.sun.star.awt.UnoControlEditModel")
     With oLst
         .PositionX = 6 : .PositionY = 113 : .Width = 328 : .Height = 96
@@ -309,15 +357,15 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, aChanges(
     oLst.Text = Trim(sChangesText)
     oMdl.insertByName("lst", oLst)
 
-    ' ── Счётчик ───────────────────────────────────
     Dim oCnt As Object : oCnt = oMdl.createInstance("com.sun.star.awt.UnoControlFixedTextModel")
+    Dim sMode As String : sMode = IIf(Settings.GetUseTrackChanges(), " · режим Track Changes", "")
     With oCnt
-        .PositionX = 6 : .PositionY = 212 : .Width = 140 : .Height = 9
-        .Label = "Исправлений: " & CStr(nChanges) : .TextColor = RGB(80, 80, 80) : .FontHeight = 11
+        .PositionX = 6 : .PositionY = 212 : .Width = 180 : .Height = 9
+        .Label = "Исправлений: " & CStr(nChanges) & sMode
+        .TextColor = RGB(80, 80, 80) : .FontHeight = 11
     End With
     oMdl.insertByName("cnt", oCnt)
 
-    ' ── Кнопки ────────────────────────────────────
     Dim oBtnOk As Object : oBtnOk = oMdl.createInstance("com.sun.star.awt.UnoControlButtonModel")
     With oBtnOk
         .PositionX = 186 : .PositionY = 209 : .Width = 70 : .Height = 15
@@ -335,7 +383,6 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, aChanges(
     End With
     oMdl.insertByName("btnCan", oBtnCan)
 
-    ' ── Запустить ─────────────────────────────────
     Dim oDlg As Object : oDlg = CreateUnoService("com.sun.star.awt.UnoControlDialog")
     oDlg.setModel(oMdl)
     Dim oTk As Object : oTk = CreateUnoService("com.sun.star.awt.Toolkit")
