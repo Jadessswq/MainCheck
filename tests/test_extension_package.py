@@ -48,14 +48,18 @@ def test_basic_modules_are_parseable(name):
     assert "]]>" in body
 
 
-def test_addons_xcu_has_two_toolbar_entries():
+def test_addons_xcu_has_single_user_toolbar_entry():
+    """
+    У сотрудника на панели — ровно одна кнопка «AI: Улучшить текст» (m001).
+    Диагностический Health.AICheckServer намеренно не вынесен на панель:
+    сотрудник не должен видеть/менять URL сервера.
+    """
     root = _parse(EXT_DIR / "Addons.xcu")
-    # Элементы <node> в xcu без явного default namespace — их имена без префикса.
     ns = "{http://openoffice.org/2001/registry}"
     nodes = root.iter("node")
     names = {n.get(f"{ns}name") for n in nodes}
-    assert "m001" in names  # AISuggestSelection
-    assert "m002" in names  # AICheckServer
+    assert "m001" in names  # AISuggestSelection — единственная кнопка работника
+    assert "m002" not in names  # AICheckServer вынесен в меню макросов
 
 
 def test_oxt_artifact_can_be_rebuilt(tmp_path):
