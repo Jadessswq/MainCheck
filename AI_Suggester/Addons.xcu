@@ -21,19 +21,16 @@
           <prop oor:name="Target" oor:type="xs:string"><value>_self</value></prop>
           <prop oor:name="Context" oor:type="xs:string"><value>com.sun.star.text.TextDocument</value></prop>
         </node>
-        <node oor:name="m002" oor:op="replace">
-          <prop oor:name="URL" oor:type="xs:string">
-            <value>vnd.sun.star.script:ai_macro.Health.AICheckServer?language=Basic&amp;location=application</value>
-          </prop>
-          <prop oor:name="ImageIdentifier" oor:type="xs:string"><value/></prop>
-          <prop oor:name="Title" oor:type="xs:string">
-            <value xml:lang="ru">AI: Проверить сервер</value>
-            <value xml:lang="en">AI: Check server</value>
-          </prop>
-          <prop oor:name="Target" oor:type="xs:string"><value>_self</value></prop>
-          <prop oor:name="Context" oor:type="xs:string"><value>com.sun.star.text.TextDocument</value></prop>
-        </node>
       </node>
     </node>
   </node>
 </oor:component-data>
+<!--
+  На панели инструментов сотрудника показывается ТОЛЬКО одна кнопка —
+  «AI: Улучшить текст» (m001). Диагностический макрос Health.AICheckServer
+  зарегистрирован в script.xlb и доступен администратору через
+  «Сервис → Макросы → Мои макросы → ai_macro → Health → AICheckServer»,
+  но намеренно не вынесен на панель: сотрудник не должен видеть и менять
+  адрес сервера.
+-->
+

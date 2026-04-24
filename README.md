@@ -1,14 +1,28 @@
-# AI LibreOffice Suggester — Module_Libre
+# AI LibreOffice Suggester
 
-Расширение для LibreOffice Writer, которое добавляет в редактор кнопку AI-корректуры
-для официальной деловой переписки. Пользователь выделяет фрагмент текста,
-нажимает кнопку, получает структурированный diff-диалог с пояснениями каждой правки.
-При согласии исправления вносятся в документ **как отслеживаемые изменения**
-(Track Changes), что позволяет принимать/отклонять их по одному штатными средствами
-LibreOffice.
+Расширение для LibreOffice Writer, которое добавляет в редактор одну кнопку
+AI-корректуры для официальной деловой переписки. Сотрудник выделяет фрагмент,
+нажимает кнопку, получает структурированный список правок и применяет их
+**как отслеживаемые изменения** (Track Changes): каждую правку можно принять
+или отклонить штатными средствами LibreOffice.
 
 **Статус:** v1.3 — стабильный прототип.
 **Платформы:** Windows 10/11 · Astra Linux (LibreOffice 7.0.4.2 – 7.6).
+
+---
+
+## Две роли
+
+Расширение разработано по модели **«админ ↔ сотрудник»**:
+
+| Роль          | Что делает                                                                                                     |
+|---------------|---------------------------------------------------------------------------------------------------------------|
+| **Админ**     | Поднимает сервер (Ollama или OpenRouter), правит один файл `Settings.xba` с адресом, пересобирает `.oxt`, рассылает сотрудникам по почте. |
+| **Сотрудник** | Получает `.oxt` по почте → устанавливает в LibreOffice → нажимает одну кнопку в панели инструментов. Больше ничего делать не надо. |
+
+Подробные гайды:
+- Сотруднику — [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) (одна страница).
+- Админу — [`docs/ADMIN_GUIDE.md`](docs/ADMIN_GUIDE.md) (развёртывание сервера + сборка .oxt + рассылка).
 
 ---
 
@@ -18,161 +32,100 @@ LibreOffice.
 Module_Libre/
 ├── AI_Suggester/                 # Исходники LibreOffice-расширения
 │   ├── ai_macro/
-│   │   ├── Main.xba              # Точка входа AISuggestSelection
-│   │   ├── Settings.xba          # Пользовательские настройки (SERVER_LIST, Track Changes, таймауты)
-│   │   ├── Health.xba            # Кнопка «AI: Проверить сервер»
-│   │   ├── script.xlb / dialog.xlb
-│   │   └── ...
-│   ├── Addons.xcu                # Кнопки на панели инструментов
+│   │   ├── Main.xba              # Точка входа AISuggestSelection (единственная кнопка сотрудника)
+│   │   ├── Settings.xba          # Админский compile-time конфиг (URL, таймауты, Track Changes)
+│   │   ├── Health.xba            # Диагностика для админа (из Сервис → Макросы)
+│   │   └── script.xlb / dialog.xlb
+│   ├── Addons.xcu                # Одна кнопка на панели
 │   ├── META-INF/manifest.xml
 │   └── description.xml
-├── AI_Suggester.oxt              # Готовый к установке архив расширения
+├── AI_Suggester.oxt              # Готовый архив для раздачи
 │
 ├── fastapi_server(2)/            # Облачный сервер (OpenRouter)
-│   ├── main.py                   # /suggest · /health · /test_api · /metrics
-│   ├── requirements.txt
-│   └── start.sh / start.bat / .env.example
-│
-├── local_server/                 # Локальный сервер (Ollama, без интернета)
-│   ├── main.py                   # + RAG-контекст + аудит + /metrics
-│   ├── requirements.txt
-│   ├── start.sh / start.bat / .env.example
-│   ├── ai-suggester.service      # systemd-юнит
-│   └── README.md
-│
+├── local_server/                 # Локальный сервер (Ollama, без интернета, + RAG + аудит)
 ├── shared/                       # Общий код серверов
 │   ├── logging_setup.py          # Логи с ротацией и retention
-│   ├── audit.py                  # SQLite-аудит (/metrics)
+│   ├── audit.py                  # SQLite-аудит + /metrics
 │   ├── garant_cleanup.py         # Очистка документов Гарант / КонсультантПлюс
-│   ├── rag_store.py              # Векторное хранилище + эмбеддеры
-│   └── rag_cli.py                # CLI для add/list/remove/search
+│   ├── rag_store.py              # Локальное векторное хранилище + эмбеддеры
+│   └── rag_cli.py                # CLI add/list/remove/search
 │
-├── tests/                        # 36 pytest-тестов (очистка, RAG, аудит, смоук серверов, валидация .oxt)
-├── docs/
-│   ├── LOCAL_MODEL.md            # Выбор, установка, отключение локальной модели
-│   ├── RAG_GUIDE.md              # Обучение на ведомственных документах
-│   ├── LOGGING.md                # Логи, аудит, retention, /metrics
-│   └── TROUBLESHOOTING.md        # Диагностика клиента, серверов, RAG
-└── README.md (этот файл)
+├── tests/                        # 36 pytest (очистка, RAG, аудит, смоук серверов, валидация .oxt)
+└── docs/
+    ├── ADMIN_GUIDE.md            # Админ: развёртывание сервера, сборка .oxt, рассылка
+    ├── USER_GUIDE.md             # Сотрудник: установить .oxt и пользоваться
+    ├── LOCAL_MODEL.md            # Выбор, установка, отключение локальной модели
+    ├── RAG_GUIDE.md              # Обучение на ведомственных документах
+    ├── LOGGING.md                # Логи, аудит, retention, /metrics
+    └── TROUBLESHOOTING.md        # Диагностика клиента, серверов, RAG
 ```
 
 ---
 
-## Быстрый старт (5 минут)
+## Быстрый старт для админа
 
-### 1. Установка расширения
+1. Поднять сервер (подробно — [`ADMIN_GUIDE.md`](docs/ADMIN_GUIDE.md)):
 
-1. Скачать `AI_Suggester.oxt` из этого репозитория.
-2. LibreOffice → **Сервис → Управление расширениями → Добавить…** → выбрать `.oxt`.
-3. Перезапустить LibreOffice. На панели инструментов появятся кнопки
-   **«AI: Улучшить текст»** и **«AI: Проверить сервер»**.
+   ```bash
+   curl -fsSL https://ollama.com/install.sh | sh
+   ollama pull qwen3:30b-a3b          # рекомендуемая модель
+   cd local_server && cp .env.example .env && pip install -r requirements.txt && ./start.sh
+   # → http://localhost:8000/health
+   ```
 
-### 2. Выбор сервера
+2. В `AI_Suggester/ai_macro/Settings.xba` заменить URL:
 
-| Вариант           | Требования                        | Описание                                        |
-|-------------------|-----------------------------------|-------------------------------------------------|
-| **Локальный**     | Ollama + RAM ≥ 24 ГБ              | Без интернета, работает на CPU                  |
-| **Облачный**      | API-ключ OpenRouter (бесплатно)   | Быстрее, но требует сеть                        |
-| **Гибрид**        | Оба                               | Автоматический fallback при сбое одного из них  |
+   ```vbnet
+   Public Function GetServerList() As String
+       GetServerList = "http://ai-gw.corp.local:8000/suggest"
+   End Function
+   ```
 
-#### Локальный (рекомендуется)
-```bash
-# 1. Ollama и модель (см. docs/LOCAL_MODEL.md)
-curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen3:30b-a3b
+3. Пересобрать `.oxt` (одна команда, в `ADMIN_GUIDE.md`) и разослать сотрудникам
+   вместе с текстом из [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md).
 
-# 2. Сервер AI Suggester
-cd local_server
-cp .env.example .env
-pip install -r requirements.txt
-./start.sh
-```
+---
 
-Проверить: <http://localhost:8000/health> → `Ollama OK | Модель qwen3:30b-a3b загружена`.
+## Быстрый старт для сотрудника
 
-#### Облачный
-```bash
-cd "fastapi_server(2)"
-cp .env.example .env
-# отредактировать .env: OPENROUTER_API_KEY=sk-or-v1-...
-pip install -r requirements.txt
-./start.sh
-```
+1. Сохранить полученный `AI_Suggester.oxt`.
+2. **Сервис → Управление расширениями → Добавить → выбрать .oxt → Перезапустить LibreOffice.**
+3. Выделить текст → нажать **«AI: Улучшить текст»** → принять/отклонить правки
+   через **Правка → Отслеживать изменения → Управление**.
 
-#### Настройка клиента
-В LibreOffice: **Сервис → Макросы → Мои макросы → ai_macro → Settings → `GetServerList`**.
-Можно указать несколько адресов через `|`, макрос перебирает их по очереди:
-
-```basic
-GetServerList = "http://localhost:8000/suggest|https://example.org/suggest"
-```
+Всё.
 
 ---
 
 ## Что нового в v1.3
 
-- **Клиент:**
-  - Модуль `Settings` — все настройки в одном месте (без правки основного кода).
-  - Проверка HTTP-статуса через `curl -w "%{http_code}"` — больше не полагаемся
-    только на наличие файла ответа.
+- **Клиент (`AI_Suggester/`)**
+  - На панели сотрудника — ровно одна кнопка. Никаких настроечных диалогов.
+  - Модуль `Settings.xba` — весь конфиг админа в одном файле, меняется один раз перед сборкой.
+  - Проверка HTTP-статуса через `curl -w "%{http_code}"` — больше не полагаемся только на наличие файла.
   - Track Changes — исправления применяются как redline-блоки, управляются штатно.
-  - Кнопка «AI: Проверить сервер» → ping `/health` для всего `SERVER_LIST`.
-- **Серверы:**
+  - Диагностический `Health.AICheckServer` для админа (через Сервис → Макросы).
+
+- **Серверы**
   - Логи с ротацией (`TimedRotatingFileHandler`, retention из `.env`).
   - SQLite-аудит: кто/когда/IP/UA/модель/длительность/sha1, настраиваемая retention,
     опциональная редакция текста (`AUDIT_REDACT_TEXT=true`).
-  - `/metrics` — сводка за окно времени в JSON.
-  - Обновлённая рекомендация локальной модели: **qwen3:30b-a3b** (MoE,
-    быстрее qwen2.5:32b на CPU в 3–5 раз при том же качестве).
-- **RAG на Гарант / КонсультантПлюс:**
-  - Модуль `shared/garant_cleanup.py` — отделяет норматив от служебных шапок/колонтитулов,
-    соединяет перенесённые слова, нормализует пробелы, сохраняет `№`.
-  - `shared/rag_store.py` — локальное векторное хранилище без тяжёлых зависимостей,
-    с поддержкой Ollama-эмбеддеров (`nomic-embed-text` по умолчанию).
-  - CLI `python -m shared.rag_cli {add,list,remove,search,ingest-folder}` — простая
-    загрузка/замена/удаление документов, замена версии одной командой.
-  - См. `docs/RAG_GUIDE.md`.
-- **Тесты:** 36 pytest-тестов (cleanup, RAG, аудит, логи, смоук-тесты FastAPI
-  с моками Ollama/OpenRouter, валидация XML расширения, ре-сборка .oxt).
-- **Безопасность:** добавлен `.gitignore`; `.env`-файлы убраны из git-трекинга.
+  - `/metrics` — JSON-сводка за окно времени.
+  - Обновлённая рекомендация локальной модели: **qwen3:30b-a3b** (MoE, ≈15–25 tok/s на 32 ядрах CPU).
+
+- **RAG**
+  - Поддержка ведомственных документов из Гарант/КонсультантПлюс:
+    автоматическая очистка служебных элементов, чанкинг, локальные эмбеддинги
+    через Ollama (`nomic-embed-text`), простое CLI для add/list/remove/update.
+
+- **Качество**
+  - 36 pytest-тестов (cleanup, RAG, audit, logging, FastAPI smoke, XML-валидация и пересборка `.oxt`).
+
+- **Безопасность**
+  - `.gitignore`, `.env` убран из git-трекинга, подробный `.env.example`.
 
 ---
 
-## Документация
+## Лицензия
 
-- 🧠 [Локальная модель: выбор, установка, отключение](docs/LOCAL_MODEL.md)
-- 📚 [RAG: обучение на документах Гарант/КонсультантПлюс](docs/RAG_GUIDE.md)
-- 📊 [Логи, аудит и мониторинг](docs/LOGGING.md)
-- 🔧 [Траблшутинг](docs/TROUBLESHOOTING.md)
-
----
-
-## Разработка
-
-```bash
-# Установить тестовые зависимости
-pip install pytest fastapi httpx python-dotenv python-multipart python-docx
-
-# Запустить все тесты (36 шт.)
-pytest tests/
-
-# Пересобрать .oxt из исходников
-python - <<'PY'
-import zipfile, pathlib
-root = pathlib.Path("AI_Suggester")
-with zipfile.ZipFile("AI_Suggester.oxt", "w", zipfile.ZIP_DEFLATED) as z:
-    for p in root.rglob("*"):
-        if p.is_file():
-            z.write(p, p.relative_to(root).as_posix())
-PY
-```
-
----
-
-## Лицензия и безопасность
-
-- Не коммитьте реальные API-ключи. `fastapi_server(2)/.env` перенесён в `.gitignore`.
-- Для production-использования рекомендуется:
-  - `AUDIT_REDACT_TEXT=true` — если тексты деловой переписки не должны храниться в открытом виде;
-  - запуск серверов от непривилегированного пользователя;
-  - ограничение доступа к порту 8000 (iptables/firewall) только из корпоративной сети.
+MIT.
