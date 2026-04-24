@@ -27,7 +27,7 @@ def _load_local_server(monkeypatch, tmp_path):
         if m.startswith(("shared", "main")):
             sys.modules.pop(m, None)
 
-    local_dir = ROOT / "local_server"
+    local_dir = ROOT / "Сервер" / "local"
     sys.path.insert(0, str(local_dir))
     module = importlib.import_module("main")
     yield module
@@ -46,7 +46,7 @@ def _load_cloud_server(monkeypatch, tmp_path):
         if m.startswith(("shared", "main")):
             sys.modules.pop(m, None)
 
-    cloud_dir = ROOT / "fastapi_server(2)"
+    cloud_dir = ROOT / "Сервер" / "cloud"
     sys.path.insert(0, str(cloud_dir))
     module = importlib.import_module("main")
     yield module
@@ -172,7 +172,7 @@ def test_cloud_missing_key(monkeypatch, tmp_path):
         if m.startswith(("shared", "main")):
             sys.modules.pop(m, None)
 
-    cloud_dir = ROOT / "fastapi_server(2)"
+    cloud_dir = ROOT / "Сервер" / "cloud"
     sys.path.insert(0, str(cloud_dir))
     try:
         module = importlib.import_module("main")

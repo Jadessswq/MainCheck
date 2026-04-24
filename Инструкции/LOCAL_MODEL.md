@@ -73,15 +73,15 @@ ollama list
 
 ## 3. Подключение к AI Suggester
 
-1. Распаковать `local_server.zip` (или использовать папку `local_server/` из репозитория).
+1. Использовать папку `Сервер/local/` из репозитория.
 2. Скопировать `.env.example` → `.env`, задать `MODEL_NAME=qwen3:30b-a3b`.
 3. Запустить:
 
-   **Linux:** `./start.sh`
-   **Windows:** `start.bat`
+   **Linux:** `cd Сервер/local && ./start.sh`
+   **Windows:** `cd Сервер\local && start.bat`
 
 4. Проверить <http://localhost:8000/health> — ожидаем `Ollama OK | Модель qwen3:30b-a3b загружена`.
-5. В LibreOffice проверить кнопку **AI: Проверить сервер** на панели инструментов — должна отобразиться строка `200  http://localhost:8000/health  → Ollama OK …`.
+5. Админу: для диагностики — **Сервис → Макросы → Мои макросы → ai_macro → Health → AICheckServer**.
 
 ---
 
@@ -176,4 +176,4 @@ curl http://localhost:11434/api/tags  # список моделей в Ollama
 curl http://localhost:8000/metrics    # аудит: запросов за 24 ч, средняя длительность
 ```
 
-См. также `docs/TROUBLESHOOTING.md`.
+См. также `Инструкции/TROUBLESHOOTING.md`.
