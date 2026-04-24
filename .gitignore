@@ -1,0 +1,39 @@
+# Environment files (may contain secrets)
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Local data (RAG store, logs, audit DB)
+data/
+logs/
+*.log
+*.sqlite
+*.sqlite3
+*.db
+chroma_store/
+rag_cache/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# LibreOffice temp / user profile
+.~lock.*
