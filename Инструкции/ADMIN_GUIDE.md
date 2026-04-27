@@ -190,7 +190,7 @@ PYTHONPATH=Сервер python -m shared.rag_cli remove fz-44
 ## 6. Обновление расширения у сотрудников
 
 1. Внести правки в `Клиент/AI_Suggester/ai_macro/*.xba` (например, новый URL или настройки).
-2. В `Клиент/AI_Suggester/description.xml` повысить `version` (1.3.0 → 1.3.1).
+2. В `Клиент/AI_Suggester/description.xml` повысить `version` (1.4.0 → 1.4.1).
 3. Пересобрать `.oxt` (Шаг 2 выше).
 4. Разослать по почте с инструкцией: «В LibreOffice: Сервис → Управление расширениями →
    Удалить старое AI Suggester → Добавить новое → Перезапустить».
