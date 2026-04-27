@@ -20,7 +20,7 @@ Module_Libre/
 │   └── AI_Suggester.oxt            готовый к установке архив
 │
 ├── Сервер/                         ← разворачивается админом
-│   ├── local/                      Ollama (qwen3:30b-a3b), без интернета
+│   ├── local/                      Ollama (qwen2.5:32b), без интернета
 │   ├── cloud/                      OpenRouter (бесплатные модели, нужен интернет)
 │   └── shared/                     общий код: логи, аудит, очистка, RAG, CLI
 │
@@ -58,9 +58,9 @@ Module_Libre/
 ## Быстрый старт для админа
 
 ```bash
-# 1. Поставить Ollama и модель (18 ГБ)
+# 1. Поставить Ollama и модель (~19 ГБ)
 curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen3:30b-a3b
+ollama pull qwen2.5:32b
 
 # 2. Поднять локальный сервер
 cd Сервер/local

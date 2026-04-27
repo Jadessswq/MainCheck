@@ -33,7 +33,7 @@ from shared.logging_setup import setup_logger  # noqa: E402
 load_dotenv()
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
-MODEL_NAME = os.getenv("MODEL_NAME", "qwen3:30b-a3b")
+MODEL_NAME = os.getenv("MODEL_NAME", "qwen2.5:32b")
 NUM_THREADS = int(os.getenv("NUM_THREADS", "28"))
 # Таймаут одного запроса к Ollama. Должен быть БОЛЬШЕ клиентского (Settings.xba),
 # чтобы клиент успевал получить осмысленную 504 вместо «нет ответа».
@@ -106,7 +106,7 @@ SYSTEM_PROMPT = """Ты — корректор русского языка дл�
 ===END==="""
 
 
-app = FastAPI(title="AI LibreOffice Suggester — Local", version="1.4.1")
+app = FastAPI(title="AI LibreOffice Suggester — Local", version="1.4.2")
 
 
 @app.on_event("startup")
