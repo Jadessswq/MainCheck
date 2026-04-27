@@ -121,6 +121,30 @@ def test_local_metrics(local_module):
     assert "audit" in data
 
 
+def test_local_strip_thinking(local_module):
+    """Проверка, что <think>…</think> обрезается из ответа Ollama."""
+    raw = (
+        "<think>Долго рассуждаю про падежи и согласование...</think>\n\n"
+        "===CORRECTED===\nтекст\n===CHANGES===\n1. Ошибок нет.\n===END==="
+    )
+    out = local_module._strip_thinking(raw)
+    assert "<think>" not in out
+    assert "Долго рассуждаю" not in out
+    assert out.startswith("===CORRECTED===")
+
+
+def test_local_strip_thinking_without_tags(local_module):
+    """Если модель пишет рассуждения без <think>, но дальше ===CORRECTED===,
+    обрезаем всё до маркера."""
+    raw = (
+        "Пользователь хочет проверку текста. Подумаю над правилами...\n\n"
+        "===CORRECTED===\nок\n===CHANGES===\n1. Ошибок нет.\n===END==="
+    )
+    out = local_module._strip_thinking(raw)
+    assert out.startswith("===CORRECTED===")
+    assert "Пользователь хочет" not in out
+
+
 def test_local_empty_text_returns_error(local_module):
     from fastapi.testclient import TestClient
     client = TestClient(local_module.app)
