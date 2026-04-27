@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -34,6 +35,15 @@ load_dotenv()
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 MODEL_NAME = os.getenv("MODEL_NAME", "qwen3:30b-a3b")
 NUM_THREADS = int(os.getenv("NUM_THREADS", "28"))
+# Таймаут одного запроса к Ollama. Должен быть БОЛЬШЕ клиентского (Settings.xba),
+# чтобы клиент успевал получить осмысленную 504 вместо «нет ответа».
+OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "180"))
+# Сколько модель остаётся в RAM после ответа. Без этого 30B-модель выгружается
+# и каждый следующий запрос ждёт ~30–90 с пока она снова грузится с диска.
+OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+# Отключает «thinking-режим» qwen3 (Ollama ≥ 0.9). Без этого модель пишет
+# многоминутный <think>…</think> перед ответом — для правки текста это лишнее.
+OLLAMA_THINK = os.getenv("OLLAMA_THINK", "false").lower() in ("1", "true", "yes", "on")
 
 # RAG
 RAG_ENABLED = os.getenv("RAG_ENABLED", "false").lower() in ("1", "true", "yes", "on")
@@ -62,66 +72,80 @@ if RAG_ENABLED:
         _rag_store = None
 
 
-SYSTEM_PROMPT = """Вы — опытный корректор русского языка. Исправляйте ТОЛЬКО реальные языковые ошибки.
+SYSTEM_PROMPT = """Ты — корректор русского языка для официальных документов. Не рассуждай, сразу выдавай ответ в нужном формате.
 
-━━━ ШАГ 1: МЫСЛЕННЫЙ АНАЛИЗ (не выводить) ━━━
-Перед правкой последовательно проверьте:
+ИСПРАВЛЯЙ ТОЛЬКО ЯВНЫЕ ОШИБКИ:
+• орфография — опечатки, удвоение/пропуск букв, слитное/раздельное написание;
+• управление — «согласно приказу» (не «согласно приказа»), «благодаря решению»;
+• согласование — однородные члены в одном падеже и числе с главным словом;
+• пунктуация — запятые при однородных членах, обособленных оборотах, придаточных.
 
-А) СОГЛАСОВАНИЕ ПРИ ОДНОРОДНЫХ ЧЛЕНАХ
-   — Если несколько определений относятся к одному существительному в конце перечисления,
-     все они должны стоять в том же падеже и числе, что и это существительное.
-   — Пример ошибки:  «в Уральском, Сибирском и Приволжском округе» (три округа → «округах»)
+НЕ ТРОГАЙ:
+• аббревиатуры и сокращения (п/п, вх.№, исх.№, ФСБ, МВД);
+• ведомственные термины и профессиональные обороты;
+• правильно написанный текст («улучшать стиль» нельзя);
+• структуру и смысл предложений.
 
-Б) УПРАВЛЕНИЕ ГЛАГОЛОВ И ПРЕДЛОГОВ
-   — «согласно приказу» (не «согласно приказа»)
-   — «благодаря решению» (не «благодаря решения»)
-
-В) ОРФОГРАФИЯ — опечатки, удвоение/пропуск букв
-
-Г) ПУНКТУАЦИЯ — однородные члены, обособленные обороты, придаточные
-
-━━━ ЧТО НЕЛЬЗЯ ТРОГАТЬ ━━━
-• Аббревиатуры и сокращения (п/п, вх.№, исх.№, ФСБ, МВД и др.) — оставить как есть
-• Ведомственные термины и профессиональные обороты — не переформулировать
-• Правильно написанный текст — не «улучшать»
-
-━━━ ПРИМЕРЫ ━━━
-ВХОД: «согласно распоряжения №45»
-CHANGES: 1. «согласно распоряжения» → «согласно распоряжению» | предлог требует дательного падежа
-
-ВХОД: «Во исполнение приказа директора»
-CHANGES: 1. Ошибок не найдено.
-
-━━━ ФОРМАТ ОТВЕТА (строго) ━━━
+ФОРМАТ ОТВЕТА (строго, без какого-либо текста до или после):
 ===CORRECTED===
 <исправленный текст>
 ===CHANGES===
-№. «было» → «стало» | причина (5–10 слов)
+1. «было» → «стало» | краткая причина (5–10 слов)
 ===END===
-Если ошибок нет: 1. Ошибок не найдено. Текст соответствует нормам."""
+
+Если ошибок нет:
+===CORRECTED===
+<исходный текст без изменений>
+===CHANGES===
+1. Ошибок не найдено. Текст соответствует нормам.
+===END==="""
 
 
-app = FastAPI(title="AI LibreOffice Suggester — Local", version="1.3.0")
+app = FastAPI(title="AI LibreOffice Suggester — Local", version="1.4.0")
+
+
+_THINK_BLOCK = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_thinking(text: str) -> str:
+    """Срезает <think>…</think> и leading-рассуждения, если модель проигнорировала /no_think.
+
+    Возвращает «чистый» ответ. Если в тексте нет ни тегов <think>, ни маркера
+    ===CORRECTED===, не трогаем — пусть верхний слой сам разбирается.
+    """
+    cleaned = _THINK_BLOCK.sub("", text)
+    # Иногда qwen3 без тегов пишет рассуждения, а ===CORRECTED=== всё равно есть ниже.
+    idx = cleaned.find("===CORRECTED===")
+    if idx > 0:
+        cleaned = cleaned[idx:]
+    return cleaned.strip()
 
 
 async def call_ollama(messages: list) -> str:
-    async with httpx.AsyncClient(timeout=300.0) as client:
-        r = await client.post(
-            f"{OLLAMA_URL}/api/chat",
-            json={
-                "model": MODEL_NAME,
-                "messages": messages,
-                "stream": False,
-                "options": {
-                    "temperature": 0.1,
-                    "num_ctx": 4096,
-                    "num_thread": NUM_THREADS,
-                    "repeat_penalty": 1.1,
-                },
-            },
-        )
+    # /no_think — soft-switch Qwen3, должен стоять в последнем user-сообщении
+    # (не в system-prompt). Работает на любой Ollama, в т.ч. старее 0.9.
+    msgs = [dict(m) for m in messages]
+    if msgs and msgs[-1].get("role") == "user" and not OLLAMA_THINK:
+        msgs[-1]["content"] = msgs[-1]["content"].rstrip() + "\n\n/no_think"
+
+    payload = {
+        "model": MODEL_NAME,
+        "messages": msgs,
+        "stream": False,
+        "think": OLLAMA_THINK,  # для Ollama ≥ 0.9; старые игнорируют поле
+        "keep_alive": OLLAMA_KEEP_ALIVE,
+        "options": {
+            "temperature": 0.1,
+            "num_ctx": 4096,
+            "num_thread": NUM_THREADS,
+            "repeat_penalty": 1.1,
+        },
+    }
+    async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
+        r = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
         r.raise_for_status()
-        return r.json()["message"]["content"].strip()
+        raw = r.json()["message"]["content"].strip()
+        return _strip_thinking(raw)
 
 
 def _rag_context(text: str) -> str:
