@@ -18,7 +18,7 @@
          │ поднимает и обслуживает
          ▼
   ┌──────────────┐
-  │  AI-сервер   │  FastAPI + Ollama (qwen3:30b-a3b) или OpenRouter
+  │  AI-сервер   │  FastAPI + Ollama (qwen2.5:32b) или OpenRouter
   │  :8000       │  логи · /metrics · аудит SQLite · опционально RAG
   └──────────────┘
 ```
@@ -88,7 +88,7 @@ cd Клиент/AI_Suggester && zip -r ../AI_Suggester.oxt . -x "*.DS_Store" && 
 3. На панели инструментов появилась **одна кнопка** «AI: Улучшить текст» — именно это увидит сотрудник.
 4. Для диагностики (только у админа!) открыть **Сервис → Макросы → Мои макросы и диалоги
    → My Macros → ai_macro → Health → AICheckServer → Запустить**. Должно показать
-   `[ 200 ]  <ваш URL>/health  → Ollama OK | Модель qwen3:30b-a3b загружена`.
+   `[ 200 ]  <ваш URL>/health  → Ollama OK | Модель qwen2.5:32b загружена`.
 
 ### Шаг 4. Раздать работникам
 
@@ -107,7 +107,7 @@ cd Клиент/AI_Suggester && zip -r ../AI_Suggester.oxt . -x "*.DS_Store" && 
 # Ollama + модель (18 ГБ)
 curl -fsSL https://ollama.com/install.sh | sh
 sudo systemctl enable --now ollama
-ollama pull qwen3:30b-a3b
+ollama pull qwen2.5:32b
 ollama pull nomic-embed-text    # нужен для RAG
 
 # AI Suggester (из корня репо)
