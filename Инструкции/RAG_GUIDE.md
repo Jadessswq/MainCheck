@@ -183,7 +183,7 @@ rm -rf data/rag_store
 ```json
 {
   "server": "local",
-  "model": "qwen3:30b-a3b",
+  "model": "qwen2.5:32b",
   "rag_enabled": true,
   "rag_documents": 37,
   "audit": { ... }

@@ -47,7 +47,7 @@ rm -rf logs/
 | `client_ip`    | TEXT    | `10.0.0.14`                              |
 | `user_agent`   | TEXT    | `LibreOffice/7.5 (X11; Linux x86_64; GA)`|
 | `server`       | TEXT    | `local` / `cloud`                        |
-| `model`        | TEXT    | `qwen3:30b-a3b`                          |
+| `model`        | TEXT    | `qwen2.5:32b`                            |
 | `text_len`     | INTEGER | длина исходного текста в символах        |
 | `context_len`  | INTEGER | длина переданного контекста              |
 | `changes_count`| INTEGER | сколько правок предложила модель         |
@@ -99,7 +99,7 @@ curl 'http://localhost:8000/metrics?hours=1'   # за последний час
 ```json
 {
   "server": "local",
-  "model": "qwen3:30b-a3b",
+  "model": "qwen2.5:32b",
   "rag_enabled": true,
   "rag_documents": 37,
   "audit": {
