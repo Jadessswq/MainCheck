@@ -183,7 +183,7 @@ rm -rf data/rag_store
 ```json
 {
   "server": "local",
-  "model": "qwen2.5:32b",
+  "model": "t-tech/T-lite-it-2.1:q4_K_M",
   "rag_enabled": true,
   "rag_documents": 37,
   "audit": { ... }
