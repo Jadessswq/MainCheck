@@ -182,6 +182,26 @@ def test_local_drops_idempotent_changes_empty_fallback(local_module):
     assert "===END===" in out
 
 
+def test_local_case_correction_is_preserved(local_module):
+    """Правка только регистра (Приказа → приказа) — валидная орфографическая,
+    НЕ должна считаться идемпотентной и НЕ должна удаляться из ===CHANGES===."""
+    raw = (
+        "===CORRECTED===\n"
+        "на основании приказа...\n"
+        "===CHANGES===\n"
+        "1. «Приказа» → «приказа» (слово не является именем собственным)\n"
+        "2. «округе» → «округе» (ложная правка — дублирует текст)\n"
+        "===END==="
+    )
+    out = local_module._drop_idempotent_changes(raw)
+    # Правка регистра сохранена
+    assert "«Приказа» → «приказа»" in out
+    # Идемпотентная отфильтрована
+    assert "«округе» → «округе»" not in out
+    # Заглушка НЕ подставлена (остался содержательный пункт)
+    assert "Ошибок не найдено" not in out
+
+
 def test_local_strip_thinking_preserves_non_thinking(local_module):
     """Если в ответе нет ни <think>, ни ===CORRECTED=== — возвращаем как есть."""
     raw = "ПроизвольныйТекстБезМаркеров"

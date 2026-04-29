@@ -217,7 +217,11 @@ def _drop_idempotent_changes(text: str) -> str:
             kept.append(line)
             continue
         m = _CHANGE_PAIR_RE.search(line)
-        if m and m.group(1).strip().lower() == m.group(2).strip().lower():
+        # Сравниваем БЕЗ .lower(): «Приказа» → «приказа» — это валидная
+        # орфографическая правка регистра (имя собственное vs нарицательное),
+        # такие пункты сохраняем. Идемпотентный пункт — это когда до и после
+        # совпадают побуквенно.
+        if m and m.group(1).strip() == m.group(2).strip():
             logger.debug("Фильтрую идемпотентный пункт: %s", line.strip())
             continue
         kept.append(line)
