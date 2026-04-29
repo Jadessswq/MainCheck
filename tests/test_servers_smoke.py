@@ -145,6 +145,50 @@ def test_local_strip_thinking_without_tags(local_module):
     assert "Пользователь хочет" not in out
 
 
+def test_local_drops_idempotent_changes(local_module):
+    """Пункт вида «X → X» (before=after) фильтруется из ===CHANGES==="""
+    raw = (
+        "===CORRECTED===\n"
+        "текст\n"
+        "===CHANGES===\n"
+        "1. «согласно распоряжению» — исправлено на «согласно распоряжению» (дательный падеж)\n"
+        "2. «округе» → «округах» (множественное число)\n"
+        "3. «отдел подготовил отчётность» — исправлено на «отдел подготовил отчётность» (без изменений)\n"
+        "===END==="
+    )
+    out = local_module._drop_idempotent_changes(raw)
+    # Первый и третий пункт должны исчезнуть; остался только содержательный
+    assert "«округах»" in out
+    assert "«согласно распоряжению»" not in out
+    assert "отдел подготовил отчётность" not in out
+    # Рамки сохранены
+    assert "===CORRECTED===" in out
+    assert "===CHANGES===" in out
+    assert "===END===" in out
+
+
+def test_local_drops_idempotent_changes_empty_fallback(local_module):
+    """Если после фильтрации пунктов не осталось — подставляем заглушку."""
+    raw = (
+        "===CORRECTED===\n"
+        "текст\n"
+        "===CHANGES===\n"
+        "1. «фраза» → «фраза»\n"
+        "2. «другая» — исправлено на «другая»\n"
+        "===END==="
+    )
+    out = local_module._drop_idempotent_changes(raw)
+    assert "Ошибок не найдено" in out
+    assert "===END===" in out
+
+
+def test_local_strip_thinking_preserves_non_thinking(local_module):
+    """Если в ответе нет ни <think>, ни ===CORRECTED=== — возвращаем как есть."""
+    raw = "ПроизвольныйТекстБезМаркеров"
+    out = local_module._strip_thinking(raw)
+    assert out == "ПроизвольныйТекстБезМаркеров"
+
+
 def test_local_empty_text_returns_error(local_module):
     from fastapi.testclient import TestClient
     client = TestClient(local_module.app)

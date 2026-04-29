@@ -1,7 +1,8 @@
 # AI LibreOffice Suggester — Локальный сервер
 
-Работает без интернета на Ollama. Рекомендуемая модель 2026 года — **qwen2.5:32b**
-(15–30 с на типовой фрагмент после прогрева, без thinking-режима).
+Работает без интернета на Ollama. Рекомендуемая модель v1.5 (апрель 2026) —
+**`t-tech/T-lite-it-2.1:q4_K_M`** (30–50 с на типовой фрагмент после прогрева,
+~5 ГБ RAM, без thinking-режима).
 
 Полное руководство: [`../Инструкции/LOCAL_MODEL.md`](../Инструкции/LOCAL_MODEL.md).
 
@@ -10,7 +11,7 @@
 ```bash
 # Ollama + модель
 curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen2.5:32b
+ollama pull t-tech/T-lite-it-2.1:q4_K_M
 ollama pull nomic-embed-text   # для RAG
 
 # Сервер
@@ -30,7 +31,7 @@ curl http://localhost:8000/metrics
 
 Все параметры — в `.env.example`. Основные:
 
-- `MODEL_NAME` — имя модели Ollama (`qwen2.5:32b`, `qwen2.5:14b`, `gemma3:27b`, …)
+- `MODEL_NAME` — имя модели Ollama (`t-tech/T-lite-it-2.1:q4_K_M`, `qwen2.5:14b`, `qwen2.5:32b`, `gemma3:27b`, …)
 - `NUM_THREADS` — потоков CPU (на 32 ядрах ставим 28, оставляем 4 ядра ОС)
 - `RAG_ENABLED` — `true/false`, включить обогащение промта выдержками из ведомственных документов
 - `LOG_LEVEL`, `LOG_RETENTION_DAYS`, `AUDIT_ENABLED` — см. `../Инструкции/LOGGING.md`

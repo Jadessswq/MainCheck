@@ -18,7 +18,7 @@
          │ поднимает и обслуживает
          ▼
   ┌──────────────┐
-  │  AI-сервер   │  FastAPI + Ollama (qwen2.5:32b) или OpenRouter
+  │  AI-сервер   │  FastAPI + Ollama (t-tech/T-lite-it-2.1) или OpenRouter
   │  :8000       │  логи · /metrics · аудит SQLite · опционально RAG
   └──────────────┘
 ```
@@ -88,7 +88,7 @@ cd Клиент/AI_Suggester && zip -r ../AI_Suggester.oxt . -x "*.DS_Store" && 
 3. На панели инструментов появилась **одна кнопка** «AI: Улучшить текст» — именно это увидит сотрудник.
 4. Для диагностики (только у админа!) открыть **Сервис → Макросы → Мои макросы и диалоги
    → My Macros → ai_macro → Health → AICheckServer → Запустить**. Должно показать
-   `[ 200 ]  <ваш URL>/health  → Ollama OK | Модель qwen2.5:32b загружена`.
+   `[ 200 ]  <ваш URL>/health  → Ollama OK | Модель t-tech/T-lite-it-2.1:q4_K_M загружена`.
 
 ### Шаг 4. Раздать работникам
 
@@ -101,13 +101,13 @@ cd Клиент/AI_Suggester && zip -r ../AI_Suggester.oxt . -x "*.DS_Store" && 
 
 ### Вариант А: локальный (рекомендуется)
 
-На сервере/workstation с 32 ГБ RAM и 16+ ядрами:
+На сервере/workstation (T-lite-it-2.1 требует 8+ ГБ RAM и 8+ ядер; для qwen2.5:14b — 16 ГБ и 16+ ядер):
 
 ```bash
-# Ollama + модель (18 ГБ)
+# Ollama + модель (~5 ГБ)
 curl -fsSL https://ollama.com/install.sh | sh
 sudo systemctl enable --now ollama
-ollama pull qwen2.5:32b
+ollama pull t-tech/T-lite-it-2.1:q4_K_M
 ollama pull nomic-embed-text    # нужен для RAG
 
 # AI Suggester (из корня репо)
