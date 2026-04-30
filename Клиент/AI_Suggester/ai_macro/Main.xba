@@ -174,24 +174,25 @@ Sub AISuggestSelection()
 
     ' Диалог: пользователь выбирает (чекбоксы), какие правки применять
     If ShowDiffDialog(sBeforePanel, sAfterPanel, aChanges(), nChanges, aSelected()) Then
-        ' Считаем, сколько реально отмечено пользователем (после диалога).
+        ' Считаем, сколько правок отмечено после диалога — нужно для guard'а
+        ' «не вызывать ApplyCorrection, если всё снято». Для выбора ветки
+        ' (per-fragment vs whole-replace) использовать НЕЛЬЗЯ: ApplyCorrection
+        ' получает nFrags (общее число распарсенных пар «старое/новое»), и
+        ' ApplyPerFragment сам пропускает невыбранные через aSelected().
+        ' Если передавать сюда «выбранные пары» — при сценарии «есть и пары
+        ' и информационная строка, пользователь снял все пары» получим
+        ' nSelected_pairs=0 → ApplyWholeReplace → всё выделение перезаписано.
         Dim nApply As Integer : nApply = 0
-        Dim nSelectedFrags As Integer : nSelectedFrags = 0
         Dim kk As Integer
         For kk = 0 To nChanges - 1
-            If aSelected(kk) Then
-                nApply = nApply + 1
-                If aOldFrags(kk) <> "" And aNewFrags(kk) <> "" Then
-                    nSelectedFrags = nSelectedFrags + 1
-                End If
-            End If
+            If aSelected(kk) Then nApply = nApply + 1
         Next kk
 
         If nApply > 0 Then
             Dim sSkipped As String : sSkipped = ""
             ApplyCorrection oDoc, oSel, sCorrected, _
                             aOldFrags(), aNewFrags(), aSelected(), _
-                            nChanges, nSelectedFrags, sSkipped
+                            nChanges, nFrags, sSkipped
 
             If sSkipped <> "" Then
                 MsgBox "Часть правок не удалось применить (фрагмент не найден " & _
