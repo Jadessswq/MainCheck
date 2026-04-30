@@ -347,6 +347,14 @@ async def suggest(
                     "1. Формат ответа не распознан — проверьте вручную.\n"
                     "===END==="
                 )
+            # Гарантия терминатора. Некоторые модели (yandex-corrector
+            # на нестандартном chat-template, hf.co/issai/Qolda_GGUF, и др.)
+            # стабильно отдают ===CORRECTED===/===CHANGES===, но забывают
+            # дописать ===END===. Без него клиент v1.5.7 в fallthrough-ветке
+            # на не-2xx HTTP считает ответ обрезанным и показывает «Все
+            # серверы недоступны». Дописываем терминатор однократно.
+            if "===END===" not in result:
+                result = result.rstrip() + "\n===END==="
         except Exception as e:
             ok = False
             error = f"{type(e).__name__}: {e}"

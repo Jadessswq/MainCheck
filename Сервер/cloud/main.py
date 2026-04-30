@@ -172,6 +172,11 @@ async def suggest(
                         "1. Формат ответа не распознан — проверьте вручную.\n"
                         "===END==="
                     )
+                # Гарантия терминатора (см. Сервер/local/main.py): дописываем
+                # ===END=== если модель его не отдала. Без этого клиент
+                # на не-2xx HTTP считает ответ обрезанным.
+                if "===END===" not in result:
+                    result = result.rstrip() + "\n===END==="
                 ok = True
                 break
             except httpx.HTTPStatusError as e:
