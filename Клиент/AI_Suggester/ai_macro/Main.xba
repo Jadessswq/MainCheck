@@ -493,7 +493,7 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, _
     With oMdl
         .Width = nW : .Height = nDlgH
         .Title = "AI Suggester — Предложение по улучшению текста"
-        .Closeable = True : .Moveable = True : .Sizeable = True
+        .Closeable = True : .Moveable = True : .Sizeable = False
     End With
 
     ' Шапка
@@ -571,8 +571,14 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, _
             sPrefix = CStr(i + 1) & ". "
         End If
         Dim sLabel As String : sLabel = sPrefix & sLine
-        ' Обрезаем, если не вмещается в колонку (грубая оценка: 1.6× от nColW в символах)
-        Dim nMaxChars As Integer : nMaxChars = (nColW * 16) \ 10
+        ' Обрезаем подпись по реальной ёмкости колонки. Width у контрола
+        ' выставляется правильно, но на Windows LibreOffice CheckBox НЕ
+        ' клипует текст по своему Width — длинная подпись рендерится за
+        ' пределы контрола и уезжает за край диалога/окна. Поэтому режем
+        ' длину строки. ~5 dialog-units на символ при FontHeight=10,
+        ' ~14 единиц съедает сам бокс чекбокса слева.
+        Dim nMaxChars As Integer : nMaxChars = (nColW - 14) \ 5
+        If nMaxChars < 8 Then nMaxChars = 8
         If Len(sLabel) > nMaxChars Then sLabel = Left(sLabel, nMaxChars - 1) & "…"
 
         Dim oCB As Object : oCB = oMdl.createInstance("com.sun.star.awt.UnoControlCheckBoxModel")
