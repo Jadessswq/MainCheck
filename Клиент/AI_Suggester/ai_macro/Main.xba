@@ -554,7 +554,7 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, _
     With oCnt
         .PositionX = 6 : .PositionY = 102 : .Width = nW - 12 : .Height = 9
         .Label = "Найдено правок: " & CStr(nChanges) & sMode & _
-                 ". Нажмите «?» рядом с галочкой, чтобы прочитать поснение."
+                 ". Нажмите «?» рядом с галочкой, чтобы прочитать пояснение."
         .TextColor = RGB(80, 80, 80) : .FontHeight = 11
         .FontWeight = com.sun.star.awt.FontWeight.BOLD
     End With
