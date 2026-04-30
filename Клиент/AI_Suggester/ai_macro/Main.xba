@@ -141,27 +141,49 @@ Sub AISuggestSelection()
         Exit Sub
     End If
 
-    ' Double-check: валидность формата ответа
+    ' ═══ Парсинг ответа ═══
     Dim sCorrected As String
     Dim nMax As Integer : nMax = Settings.GetMaxChanges()
     Dim aChanges() As String : ReDim aChanges(nMax)
+    Dim aOldFrags() As String : ReDim aOldFrags(nMax)
+    Dim aNewFrags() As String : ReDim aNewFrags(nMax)
     Dim nChanges As Integer
 
-    If Not ParseResponse(sRaw, sCorrected, aChanges(), nChanges) Then
-        ' Ответ пришёл, но без маркеров — показать как есть, не подменять
+    Dim bParsed As Boolean
+    bParsed = ParseResponse(sRaw, sCorrected, aChanges(), aOldFrags(), aNewFrags(), nChanges)
+    If Not bParsed Then
+        ' Ответ пришёл, но без маркеров — показать как есть, без структурных правок.
         sCorrected = sRaw
         aChanges(0) = "Ответ сервера без структурных маркеров — проверка невозможна"
+        aOldFrags(0) = "" : aNewFrags(0) = ""
         nChanges = 1
     End If
 
-    ' Панели diff
-    Dim sBeforePanel As String
-    Dim sAfterPanel  As String
-    BuildDiffPanels aChanges(), nChanges, sBeforePanel, sAfterPanel
+    ' Сколько из правок реально применимы как find/replace (есть и старое, и новое)
+    Dim aSelected() As Boolean : ReDim aSelected(nMax)
+    Dim nFrags As Integer : nFrags = 0
+    Dim k As Integer
+    For k = 0 To nChanges - 1
+        aSelected(k) = True
+        If aOldFrags(k) <> "" And aNewFrags(k) <> "" Then nFrags = nFrags + 1
+    Next k
 
-    ' Диалог
-    If ShowDiffDialog(sBeforePanel, sAfterPanel, aChanges(), nChanges) Then
-        ApplyCorrection oDoc, oSel, sCorrected
+    ' Панели diff — берут «до/после» из тех же aOldFrags/aNewFrags
+    Dim sBeforePanel As String, sAfterPanel As String
+    BuildDiffPanels aOldFrags(), aNewFrags(), aChanges(), nChanges, sBeforePanel, sAfterPanel
+
+    ' Диалог: пользователь выбирает (чекбоксы), какие правки применять
+    If ShowDiffDialog(sBeforePanel, sAfterPanel, aChanges(), nChanges, aSelected()) Then
+        Dim sSkipped As String : sSkipped = ""
+        ApplyCorrection oDoc, oSel, sCorrected, _
+                        aOldFrags(), aNewFrags(), aSelected(), _
+                        nChanges, nFrags, sSkipped
+
+        If sSkipped <> "" Then
+            MsgBox "Часть правок не удалось применить (фрагмент не найден " & _
+                   "в выделении — текст уже отличается от того, что видел сервер):" & _
+                   Chr(10) & Chr(10) & sSkipped, 48, "AI Suggester — отчёт"
+        End If
     End If
 
     Exit Sub
@@ -171,14 +193,21 @@ End Sub
 
 
 ' ═══════════════════════════════════════════════════
-'  ПРИМЕНЕНИЕ ИСПРАВЛЕНИЯ С УЧЁТОМ TRACK CHANGES
+'  ПРИМЕНЕНИЕ ИСПРАВЛЕНИЙ
 ' ═══════════════════════════════════════════════════
+' Если у нас распарсены пары «старое»/«новое» — применяем поштучно
+' (каждая правка = свой redline). Если пар нет (сервер вернул только
+' CORRECTED, или пары не извлеклись) — fallback на whole-replace
+' с сохранением разрывов абзацев и стиля.
+'
 ' Если Settings.GetUseTrackChanges() = True, перед заменой включаем режим
-' «Отслеживать изменения» (RecordChanges). LibreOffice сам формирует
-' redline-блоки (зачёркнутый исходный текст + цветной исправленный),
-' которые пользователь может принять/отклонить по одному через меню
+' «Отслеживать изменения» (RecordChanges) — LibreOffice сам формирует
+' redline-блоки, которые пользователь принимает/отклоняет через
 ' «Правка → Отслеживать изменения → Управление».
-Sub ApplyCorrection(oDoc As Object, oSel As Object, sCorrected As String)
+Sub ApplyCorrection(oDoc As Object, oSel As Object, sCorrected As String, _
+                    aOldFrags() As String, aNewFrags() As String, _
+                    aSelected() As Boolean, nChanges As Integer, _
+                    nFrags As Integer, ByRef sSkipped As String)
     Dim bPrevRec As Boolean : bPrevRec = False
     Dim bShouldRestore As Boolean : bShouldRestore = False
 
@@ -193,7 +222,12 @@ Sub ApplyCorrection(oDoc As Object, oSel As Object, sCorrected As String)
         On Error Goto 0
     End If
 
-    oSel.setString(sCorrected)
+    If nFrags > 0 Then
+        ApplyPerFragment oSel, aOldFrags(), aNewFrags(), aSelected(), nChanges, sSkipped
+    Else
+        ' Нет структурированных правок — применяем целиком, но аккуратно
+        ApplyWholeReplace oSel, sCorrected
+    End If
 
     If bShouldRestore Then
         On Error Resume Next
@@ -203,10 +237,109 @@ Sub ApplyCorrection(oDoc As Object, oSel As Object, sCorrected As String)
 End Sub
 
 
+' Точечная замена каждой пары (sOld → sNew) внутри границ исходного выделения.
+' Track Changes (если включён) фиксирует каждую правку отдельным redline,
+' пользователь принимает/отклоняет каждую штатно.
+Sub ApplyPerFragment(oSel As Object, _
+                     aOldFrags() As String, aNewFrags() As String, _
+                     aSelected() As Boolean, nChanges As Integer, _
+                     ByRef sSkipped As String)
+    Dim oTextObj As Object : oTextObj = oSel.getText()
+
+    ' Запоминаем границы исходного выделения. XTextRange корректно
+    ' переезжает по документу при правках, так что oRangeEnd останется
+    ' валидным после каждой замены.
+    Dim oRangeStart As Object : oRangeStart = oSel.getStart()
+    Dim oRangeEnd   As Object : oRangeEnd   = oSel.getEnd()
+
+    Dim i As Integer
+    For i = 0 To nChanges - 1
+        If Not aSelected(i) Then GoTo NextFrag
+        Dim sOld As String : sOld = aOldFrags(i)
+        Dim sNew As String : sNew = aNewFrags(i)
+        If sOld = "" Then GoTo NextFrag
+
+        ' Курсор по всему текущему выделению (после прошлых правок)
+        Dim oCur As Object : oCur = oTextObj.createTextCursorByRange(oRangeStart)
+        oCur.gotoRange(oRangeEnd, True)
+        Dim sCurText As String : sCurText = oCur.getString()
+
+        Dim nPos As Long : nPos = InStr(sCurText, sOld)
+        If nPos = 0 Then
+            sSkipped = sSkipped & "  • «" & Left(sOld, 80) & _
+                       IIf(Len(sOld) > 80, "…", "") & "»" & Chr(10)
+            GoTo NextFrag
+        End If
+
+        ' Курсор для замены: oRangeStart + (nPos-1) символов вправо,
+        ' расширить вправо на Len(sOld) с зажатым shift, затем setString
+        Dim oRepl As Object : oRepl = oTextObj.createTextCursorByRange(oRangeStart)
+        oRepl.goRight(nPos - 1, False)
+        oRepl.goRight(Len(sOld), True)
+        oRepl.setString(sNew)
+
+        NextFrag:
+    Next i
+End Sub
+
+
+' Целиковая замена с сохранением разрывов абзацев и стиля.
+' Используется ТОЛЬКО когда сервер не вернул структурированные пары.
+' Делает: запоминает ParaStyleName начала выделения, удаляет содержимое,
+' вставляет текст по строкам с настоящими PARAGRAPH_BREAK между ними.
+Sub ApplyWholeReplace(oSel As Object, sText As String)
+    ' Нормализуем переводы строк: всегда Chr(10)
+    Dim sNorm As String
+    sNorm = Replace(sText, Chr(13) & Chr(10), Chr(10))
+    sNorm = Replace(sNorm, Chr(13), Chr(10))
+
+    Dim oTextObj As Object : oTextObj = oSel.getText()
+
+    ' Запоминаем стиль абзаца в стартовой позиции, чтобы восстановить его
+    Dim sParaStyle As String : sParaStyle = ""
+    On Error Resume Next
+    Dim oStartCur As Object : oStartCur = oTextObj.createTextCursorByRange(oSel.getStart())
+    sParaStyle = oStartCur.ParaStyleName
+    On Error Goto 0
+
+    ' Удаляем выделение
+    oSel.setString("")
+
+    ' Курсор в позицию удалённого выделения
+    Dim oCur As Object : oCur = oTextObj.createTextCursorByRange(oSel.getStart())
+    If sParaStyle <> "" Then
+        On Error Resume Next
+        oCur.ParaStyleName = sParaStyle
+        On Error Goto 0
+    End If
+
+    Dim aParas() As String : aParas = Split(sNorm, Chr(10))
+    Dim i As Integer
+    For i = 0 To UBound(aParas)
+        If i > 0 Then
+            ' Разрыв абзаца, а не line break — иначе нумерация и стили
+            ' не подхватятся для следующего параграфа.
+            On Error Resume Next
+            oTextObj.insertControlCharacter(oCur, _
+                com.sun.star.text.ControlCharacter.PARAGRAPH_BREAK, False)
+            On Error Goto 0
+        End If
+        oTextObj.insertString(oCur, aParas(i), False)
+    Next i
+End Sub
+
+
 ' ═══════════════════════════════════════════════════
 '  ПАРСИНГ ОТВЕТА СЕРВЕРА
 ' ═══════════════════════════════════════════════════
-Function ParseResponse(sRaw As String, sCorrected As String, aChanges() As String, nChanges As Integer) As Boolean
+' aChanges()  — полные строки правок (для UI и пояснений)
+' aOldFrags() — фрагмент в «старое» (между Chr(171) и Chr(187), пара 1)
+' aNewFrags() — фрагмент в «новое» (между Chr(171) и Chr(187), пара 2)
+' Если в строке нет двух пар guillemets — фрагменты остаются пустыми;
+' такая правка отображается, но не применяется автоматически.
+Function ParseResponse(sRaw As String, sCorrected As String, _
+                       aChanges() As String, aOldFrags() As String, _
+                       aNewFrags() As String, nChanges As Integer) As Boolean
     Dim nP1 As Long : nP1 = InStr(sRaw, SEP_CORR)
     Dim nP2 As Long : nP2 = InStr(sRaw, SEP_CHANGES)
     Dim nP3 As Long : nP3 = InStr(sRaw, SEP_END)
@@ -231,12 +364,18 @@ Function ParseResponse(sRaw As String, sCorrected As String, aChanges() As Strin
         If Right(sLine, 1) = Chr(13) Then sLine = Left(sLine, Len(sLine) - 1)
         If sLine <> "" And Left(sLine, 3) <> "===" Then
             aChanges(nChanges) = sLine
+            aOldFrags(nChanges) = ExtractBetweenGuillemets(sLine, 1)
+            aNewFrags(nChanges) = ExtractBetweenGuillemets(sLine, 2)
             nChanges = nChanges + 1
             If nChanges >= nMax Then Exit For
         End If
     Next i
 
-    If nChanges = 0 Then aChanges(0) = "Ошибок не найдено." : nChanges = 1
+    If nChanges = 0 Then
+        aChanges(0) = "Ошибок не найдено."
+        aOldFrags(0) = "" : aNewFrags(0) = ""
+        nChanges = 1
+    End If
     ParseResponse = True
 End Function
 
@@ -244,17 +383,19 @@ End Function
 ' ═══════════════════════════════════════════════════
 '  ИЗВЛЕЧЕНИЕ ФРАГМЕНТОВ ДО/ПОСЛЕ ИЗ СПИСКА ИЗМЕНЕНИЙ
 ' ═══════════════════════════════════════════════════
-Sub BuildDiffPanels(aChanges() As String, nChanges As Integer, sBefore As String, sAfter As String)
+Sub BuildDiffPanels(aOldFrags() As String, aNewFrags() As String, _
+                    aChanges() As String, nChanges As Integer, _
+                    sBefore As String, sAfter As String)
     sBefore = ""
     sAfter  = ""
     Dim i As Integer
     For i = 0 To nChanges - 1
-        Dim sLine As String : sLine = aChanges(i)
-        Dim sB As String : sB = ExtractBetweenGuillemets(sLine, 1)
-        Dim sA As String : sA = ExtractBetweenGuillemets(sLine, 2)
+        Dim sB As String : sB = aOldFrags(i)
+        Dim sA As String : sA = aNewFrags(i)
 
         If sB <> "" Or sA <> "" Then
             Dim sN As String : sN = ""
+            Dim sLine As String : sLine = aChanges(i)
             Dim nDot As Integer : nDot = InStr(sLine, ".")
             If nDot > 0 And nDot <= 3 Then sN = Left(sLine, nDot) & " "
 
@@ -290,15 +431,21 @@ End Function
 
 
 ' ═══════════════════════════════════════════════════
-'  ДИАЛОГ С DIFF-ОТОБРАЖЕНИЕМ
+'  ДИАЛОГ С DIFF-ОТОБРАЖЕНИЕМ + ВЫБОРОМ ПРАВОК
 ' ═══════════════════════════════════════════════════
-Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, aChanges() As String, nChanges As Integer) As Boolean
+' Возвращает True, если пользователь нажал OK. aSelected() выставляется
+' по итогам выбора в ListBox (true = применить эту правку, false = пропустить).
+' На вход aSelected() приходит со всеми True (по умолчанию все правки
+' выбраны); пользователь снимает галочки только с тех, что не нужны.
+Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, _
+                        aChanges() As String, nChanges As Integer, _
+                        aSelected() As Boolean) As Boolean
     ShowDiffDialog = False
     On Error GoTo DlgErr
 
     Dim oMdl As Object : oMdl = CreateUnoService("com.sun.star.awt.UnoControlDialogModel")
     Dim nW As Integer : nW = 340
-    Dim nH As Integer : nH = 252
+    Dim nH As Integer : nH = 280
     With oMdl
         .Width = nW : .Height = nH
         .Title = "AI Suggester — Предложение по улучшению текста"
@@ -308,7 +455,7 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, aChanges(
     Dim oHdr As Object : oHdr = oMdl.createInstance("com.sun.star.awt.UnoControlFixedTextModel")
     With oHdr
         .PositionX = 0 : .PositionY = 0 : .Width = nW : .Height = 14
-        .Label = "  Найденные ошибки и их исправления. Проверьте и примите решение."
+        .Label = "  Найденные ошибки. Снимите галочки с тех правок, которые применять не нужно."
         .BackgroundColor = RGB(17, 78, 140) : .TextColor = RGB(255, 255, 255)
         .FontWeight = com.sun.star.awt.FontWeight.BOLD : .FontHeight = 11
     End With
@@ -353,37 +500,46 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, aChanges(
     Dim oSep As Object : oSep = oMdl.createInstance("com.sun.star.awt.UnoControlFixedLineModel")
     With oSep
         .PositionX = 6 : .PositionY = 102 : .Width = 328 : .Height = 10
-        .Label = "Пояснения к каждому исправлению:"
+        .Label = "Применить выбранные правки (по умолчанию — все):"
     End With
     oMdl.insertByName("sep", oSep)
 
-    Dim oLst As Object : oLst = oMdl.createInstance("com.sun.star.awt.UnoControlEditModel")
+    ' MultiSelection ListBox с пояснениями к каждой правке.
+    ' По умолчанию выделены все строки → SelectedItems = 0..nChanges-1.
+    Dim oLst As Object : oLst = oMdl.createInstance("com.sun.star.awt.UnoControlListBoxModel")
     With oLst
-        .PositionX = 6 : .PositionY = 113 : .Width = 328 : .Height = 96
-        .MultiLine = True : .ReadOnly = True : .VScroll = True : .HScroll = False
-        .Border = 1 : .BackgroundColor = RGB(250, 250, 255)
-        .FontHeight = 14 : .FontName = "Courier New"
+        .PositionX = 6 : .PositionY = 113 : .Width = 328 : .Height = 124
+        .MultiSelection = True : .Border = 1
+        .BackgroundColor = RGB(250, 250, 255)
+        .FontHeight = 12 : .FontName = "Courier New"
     End With
-    Dim sChangesText As String : sChangesText = ""
+
+    Dim aItems() As String : ReDim aItems(nChanges - 1)
+    Dim aDefault() As Integer : ReDim aDefault(nChanges - 1)
     Dim i As Integer
     For i = 0 To nChanges - 1
-        If Trim(aChanges(i)) <> "" Then sChangesText = sChangesText & aChanges(i) & Chr(10)
+        Dim sLine As String : sLine = aChanges(i)
+        If sLine = "" Then sLine = "(пустая строка)"
+        aItems(i) = " ☑ " & sLine
+        aDefault(i) = i
     Next i
-    oLst.Text = Trim(sChangesText)
+    oLst.StringItemList = aItems
+    oLst.SelectedItems = aDefault
     oMdl.insertByName("lst", oLst)
 
     Dim oCnt As Object : oCnt = oMdl.createInstance("com.sun.star.awt.UnoControlFixedTextModel")
     Dim sMode As String : sMode = IIf(Settings.GetUseTrackChanges(), " · режим Track Changes", "")
     With oCnt
-        .PositionX = 6 : .PositionY = 212 : .Width = 180 : .Height = 9
-        .Label = "Исправлений: " & CStr(nChanges) & sMode
+        .PositionX = 6 : .PositionY = 240 : .Width = 180 : .Height = 9
+        .Label = "Найдено правок: " & CStr(nChanges) & sMode & _
+                 ". Ctrl+клик — снять/добавить."
         .TextColor = RGB(80, 80, 80) : .FontHeight = 11
     End With
     oMdl.insertByName("cnt", oCnt)
 
     Dim oBtnOk As Object : oBtnOk = oMdl.createInstance("com.sun.star.awt.UnoControlButtonModel")
     With oBtnOk
-        .PositionX = 186 : .PositionY = 209 : .Width = 70 : .Height = 15
+        .PositionX = 186 : .PositionY = 237 : .Width = 70 : .Height = 15
         .Label = "✓  Применить" : .PushButtonType = com.sun.star.awt.PushButtonType.OK
         .DefaultButton = True : .BackgroundColor = RGB(0, 110, 0) : .TextColor = RGB(255,255,255)
         .FontWeight = com.sun.star.awt.FontWeight.BOLD : .FontHeight = 11
@@ -392,7 +548,7 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, aChanges(
 
     Dim oBtnCan As Object : oBtnCan = oMdl.createInstance("com.sun.star.awt.UnoControlButtonModel")
     With oBtnCan
-        .PositionX = 264 : .PositionY = 209 : .Width = 70 : .Height = 15
+        .PositionX = 264 : .PositionY = 237 : .Width = 70 : .Height = 15
         .Label = "✗  Отклонить" : .PushButtonType = com.sun.star.awt.PushButtonType.CANCEL
         .BackgroundColor = RGB(160, 0, 0) : .TextColor = RGB(255,255,255) : .FontHeight = 11
     End With
@@ -403,6 +559,22 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, aChanges(
     Dim oTk As Object : oTk = CreateUnoService("com.sun.star.awt.Toolkit")
     oDlg.createPeer(oTk, StarDesktop.getCurrentFrame().getContainerWindow())
     Dim nRes As Integer : nRes = oDlg.execute()
+
+    ' Если пользователь нажал OK — забираем индексы выбранных строк
+    If nRes = 1 Then
+        Dim aSel() As Integer
+        aSel = oDlg.getControl("lst").Model.SelectedItems
+        Dim j As Integer
+        For j = 0 To nChanges - 1
+            aSelected(j) = False
+        Next j
+        For j = 0 To UBound(aSel)
+            If aSel(j) >= 0 And aSel(j) < nChanges Then
+                aSelected(aSel(j)) = True
+            End If
+        Next j
+    End If
+
     oDlg.dispose()
     ShowDiffDialog = (nRes = 1)
     Exit Function

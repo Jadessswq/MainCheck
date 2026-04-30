@@ -19,7 +19,7 @@ def test_description_version():
     root = _parse(EXT_DIR / "description.xml")
     version = root.find("{http://openoffice.org/extensions/description/2006}version")
     assert version is not None
-    assert version.get("value") == "1.5.1"
+    assert version.get("value") == "1.5.2"
 
 
 def test_manifest_lists_library_and_xcu():
