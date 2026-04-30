@@ -174,15 +174,30 @@ Sub AISuggestSelection()
 
     ' Диалог: пользователь выбирает (чекбоксы), какие правки применять
     If ShowDiffDialog(sBeforePanel, sAfterPanel, aChanges(), nChanges, aSelected()) Then
-        Dim sSkipped As String : sSkipped = ""
-        ApplyCorrection oDoc, oSel, sCorrected, _
-                        aOldFrags(), aNewFrags(), aSelected(), _
-                        nChanges, nFrags, sSkipped
+        ' Считаем, сколько реально отмечено пользователем (после диалога).
+        Dim nApply As Integer : nApply = 0
+        Dim nSelectedFrags As Integer : nSelectedFrags = 0
+        Dim kk As Integer
+        For kk = 0 To nChanges - 1
+            If aSelected(kk) Then
+                nApply = nApply + 1
+                If aOldFrags(kk) <> "" And aNewFrags(kk) <> "" Then
+                    nSelectedFrags = nSelectedFrags + 1
+                End If
+            End If
+        Next kk
 
-        If sSkipped <> "" Then
-            MsgBox "Часть правок не удалось применить (фрагмент не найден " & _
-                   "в выделении — текст уже отличается от того, что видел сервер):" & _
-                   Chr(10) & Chr(10) & sSkipped, 48, "AI Suggester — отчёт"
+        If nApply > 0 Then
+            Dim sSkipped As String : sSkipped = ""
+            ApplyCorrection oDoc, oSel, sCorrected, _
+                            aOldFrags(), aNewFrags(), aSelected(), _
+                            nChanges, nSelectedFrags, sSkipped
+
+            If sSkipped <> "" Then
+                MsgBox "Часть правок не удалось применить (фрагмент не найден " & _
+                       "в выделении — текст уже отличается от того, что видел сервер):" & _
+                       Chr(10) & Chr(10) & sSkipped, 48, "AI Suggester — отчёт"
+            End If
         End If
     End If
 
@@ -263,6 +278,11 @@ Sub ApplyPerFragment(oSel As Object, _
         Dim oCur As Object : oCur = oTextObj.createTextCursorByRange(oRangeStart)
         oCur.gotoRange(oRangeEnd, True)
         Dim sCurText As String : sCurText = oCur.getString()
+        ' Writer возвращает в getString() разрыв абзаца как \r\n (2 символа),
+        ' тогда как goRight() считает разрыв за 1 позицию. Без нормализации
+        ' nPos завышается на число абзацев между началом выделения и найденным
+        ' фрагментом → goRight промахивается → setString портит чужой текст.
+        sCurText = Replace(sCurText, Chr(13), "")
 
         Dim nPos As Long : nPos = InStr(sCurText, sOld)
         If nPos = 0 Then
@@ -434,24 +454,48 @@ End Function
 '  ДИАЛОГ С DIFF-ОТОБРАЖЕНИЕМ + ВЫБОРОМ ПРАВОК
 ' ═══════════════════════════════════════════════════
 ' Возвращает True, если пользователь нажал OK. aSelected() выставляется
-' по итогам выбора в ListBox (true = применить эту правку, false = пропустить).
+' по итогам состояния каждого CheckBox (true = применить, false = пропустить).
 ' На вход aSelected() приходит со всеми True (по умолчанию все правки
-' выбраны); пользователь снимает галочки только с тех, что не нужны.
+' выбраны). Пользователь снимает галочки тех, что применять не нужно —
+' клик по самому чекбоксу штатно переключает State (без модификаторов).
+'
+' Layout вычисляется динамически: при большом числе правок раскладываем
+' в 2 колонки, чтобы дилог не вылезал за экран; при > 36 — в 3.
 Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, _
                         aChanges() As String, nChanges As Integer, _
                         aSelected() As Boolean) As Boolean
     ShowDiffDialog = False
     On Error GoTo DlgErr
 
-    Dim oMdl As Object : oMdl = CreateUnoService("com.sun.star.awt.UnoControlDialogModel")
+    ' Геометрия
     Dim nW As Integer : nW = 340
-    Dim nH As Integer : nH = 280
+    Dim nRowH As Integer : nRowH = 12
+    Dim nCBStartY As Integer : nCBStartY = 122
+
+    Dim nCols As Integer
+    If nChanges <= 18 Then
+        nCols = 1
+    ElseIf nChanges <= 36 Then
+        nCols = 2
+    Else
+        nCols = 3
+    End If
+    Dim nRowsPerCol As Integer
+    nRowsPerCol = (nChanges + nCols - 1) \ nCols
+    If nRowsPerCol < 1 Then nRowsPerCol = 1
+
+    Dim nFooterH As Integer : nFooterH = 26   ' высота полосы с кнопками
+    Dim nDlgH As Integer
+    nDlgH = nCBStartY + nRowsPerCol * nRowH + nFooterH + 6
+
+    Dim oMdl As Object : oMdl = CreateUnoService("com.sun.star.awt.UnoControlDialogModel")
     With oMdl
-        .Width = nW : .Height = nH
+        .Width = nW : .Height = nDlgH
         .Title = "AI Suggester — Предложение по улучшению текста"
-        .Closeable = True : .Moveable = True : .Sizeable = False
+        .Closeable = True : .Moveable = True : .Sizeable = True
     End With
 
+    ' Шапка
     Dim oHdr As Object : oHdr = oMdl.createInstance("com.sun.star.awt.UnoControlFixedTextModel")
     With oHdr
         .PositionX = 0 : .PositionY = 0 : .Width = nW : .Height = 14
@@ -461,6 +505,7 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, _
     End With
     oMdl.insertByName("hdr", oHdr)
 
+    ' Заголовки панелей diff
     Dim oL1 As Object : oL1 = oMdl.createInstance("com.sun.star.awt.UnoControlFixedTextModel")
     With oL1
         .PositionX = 6 : .PositionY = 17 : .Width = 158 : .Height = 9
@@ -497,49 +542,56 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, _
     End With
     oMdl.insertByName("t2", oT2)
 
-    Dim oSep As Object : oSep = oMdl.createInstance("com.sun.star.awt.UnoControlFixedLineModel")
-    With oSep
-        .PositionX = 6 : .PositionY = 102 : .Width = 328 : .Height = 10
-        .Label = "Применить выбранные правки (по умолчанию — все):"
-    End With
-    oMdl.insertByName("sep", oSep)
-
-    ' MultiSelection ListBox с пояснениями к каждой правке.
-    ' По умолчанию выделены все строки → SelectedItems = 0..nChanges-1.
-    Dim oLst As Object : oLst = oMdl.createInstance("com.sun.star.awt.UnoControlListBoxModel")
-    With oLst
-        .PositionX = 6 : .PositionY = 113 : .Width = 328 : .Height = 124
-        .MultiSelection = True : .Border = 1
-        .BackgroundColor = RGB(250, 250, 255)
-        .FontHeight = 12 : .FontName = "Courier New"
-    End With
-
-    Dim aItems() As String : ReDim aItems(nChanges - 1)
-    Dim aDefault() As Integer : ReDim aDefault(nChanges - 1)
-    Dim i As Integer
-    For i = 0 To nChanges - 1
-        Dim sLine As String : sLine = aChanges(i)
-        If sLine = "" Then sLine = "(пустая строка)"
-        aItems(i) = " ☑ " & sLine
-        aDefault(i) = i
-    Next i
-    oLst.StringItemList = aItems
-    oLst.SelectedItems = aDefault
-    oMdl.insertByName("lst", oLst)
-
+    ' Полоса со счётчиком — отдельной строкой над чекбоксами,
+    ' чтобы не пересекаться с кнопками внизу.
     Dim oCnt As Object : oCnt = oMdl.createInstance("com.sun.star.awt.UnoControlFixedTextModel")
     Dim sMode As String : sMode = IIf(Settings.GetUseTrackChanges(), " · режим Track Changes", "")
     With oCnt
-        .PositionX = 6 : .PositionY = 240 : .Width = 180 : .Height = 9
+        .PositionX = 6 : .PositionY = 102 : .Width = nW - 12 : .Height = 9
         .Label = "Найдено правок: " & CStr(nChanges) & sMode & _
-                 ". Ctrl+клик — снять/добавить."
+                 ". Клик по галочке — переключить."
         .TextColor = RGB(80, 80, 80) : .FontHeight = 11
+        .FontWeight = com.sun.star.awt.FontWeight.BOLD
     End With
     oMdl.insertByName("cnt", oCnt)
 
+    ' Чекбоксы — по штуке на правку.
+    Dim nColW As Integer : nColW = (nW - 12) \ nCols   ' ширина колонки
+    Dim i As Integer
+    For i = 0 To nChanges - 1
+        Dim nCol As Integer : nCol = i Mod nCols
+        Dim nRow As Integer : nRow = i \ nCols
+
+        Dim sLine As String : sLine = aChanges(i)
+        If sLine = "" Then sLine = "(пустая строка)"
+        ' Префикс с порядковым номером для удобства, если в строке нет своего
+        Dim sPrefix As String : sPrefix = ""
+        If Len(sLine) < 3 Or InStr(Left(sLine, 4), ".") = 0 Then
+            sPrefix = CStr(i + 1) & ". "
+        End If
+        Dim sLabel As String : sLabel = sPrefix & sLine
+        ' Обрезаем, если не вмещается в колонку (грубая оценка: 1.6× от nColW в символах)
+        Dim nMaxChars As Integer : nMaxChars = (nColW * 16) \ 10
+        If Len(sLabel) > nMaxChars Then sLabel = Left(sLabel, nMaxChars - 1) & "…"
+
+        Dim oCB As Object : oCB = oMdl.createInstance("com.sun.star.awt.UnoControlCheckBoxModel")
+        With oCB
+            .PositionX = 6 + nCol * nColW
+            .PositionY = nCBStartY + nRow * nRowH
+            .Width = nColW - 2 : .Height = nRowH - 1
+            .Label = sLabel
+            .State = 1                ' 0=unchecked, 1=checked, 2=undetermined
+            .TriState = False
+            .FontHeight = 10
+        End With
+        oMdl.insertByName("cb_" & i, oCB)
+    Next i
+
+    ' Кнопки — внизу, сразу под полем чекбоксов
+    Dim nBtnY As Integer : nBtnY = nCBStartY + nRowsPerCol * nRowH + 4
     Dim oBtnOk As Object : oBtnOk = oMdl.createInstance("com.sun.star.awt.UnoControlButtonModel")
     With oBtnOk
-        .PositionX = 186 : .PositionY = 237 : .Width = 70 : .Height = 15
+        .PositionX = nW - 152 : .PositionY = nBtnY : .Width = 70 : .Height = 18
         .Label = "✓  Применить" : .PushButtonType = com.sun.star.awt.PushButtonType.OK
         .DefaultButton = True : .BackgroundColor = RGB(0, 110, 0) : .TextColor = RGB(255,255,255)
         .FontWeight = com.sun.star.awt.FontWeight.BOLD : .FontHeight = 11
@@ -548,7 +600,7 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, _
 
     Dim oBtnCan As Object : oBtnCan = oMdl.createInstance("com.sun.star.awt.UnoControlButtonModel")
     With oBtnCan
-        .PositionX = 264 : .PositionY = 237 : .Width = 70 : .Height = 15
+        .PositionX = nW - 76 : .PositionY = nBtnY : .Width = 70 : .Height = 18
         .Label = "✗  Отклонить" : .PushButtonType = com.sun.star.awt.PushButtonType.CANCEL
         .BackgroundColor = RGB(160, 0, 0) : .TextColor = RGB(255,255,255) : .FontHeight = 11
     End With
@@ -560,18 +612,12 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, _
     oDlg.createPeer(oTk, StarDesktop.getCurrentFrame().getContainerWindow())
     Dim nRes As Integer : nRes = oDlg.execute()
 
-    ' Если пользователь нажал OK — забираем индексы выбранных строк
+    ' Если пользователь нажал OK — забираем State каждого CheckBox.
+    ' State: 0 = unchecked, 1 = checked, 2 = undetermined (не используем).
     If nRes = 1 Then
-        Dim aSel() As Integer
-        aSel = oDlg.getControl("lst").Model.SelectedItems
         Dim j As Integer
         For j = 0 To nChanges - 1
-            aSelected(j) = False
-        Next j
-        For j = 0 To UBound(aSel)
-            If aSel(j) >= 0 And aSel(j) < nChanges Then
-                aSelected(aSel(j)) = True
-            End If
+            aSelected(j) = (oDlg.getControl("cb_" & j).Model.State = 1)
         Next j
     End If
 
