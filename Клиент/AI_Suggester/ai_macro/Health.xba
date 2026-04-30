@@ -27,7 +27,9 @@ Sub AICheckServer()
 
         Dim sCmd As String
         If GetGUIType() = 1 Then
-            sCmd = "/c curl.exe -s --max-time 10 -o """ & sOut & """ -w ""%{http_code}"" " & sUrl & " > """ & sStatusFile & """"
+            ' Windows cmd.exe: удваиваем % в %%{http_code}, иначе cmd
+            ' интерпретирует одиночный % и -w приходит в curl пустым.
+            sCmd = "/c curl.exe -s --max-time 10 -o """ & sOut & """ -w ""%%{http_code}"" " & sUrl & " > """ & sStatusFile & """"
             Shell "cmd.exe", 1, sCmd, True
         Else
             sCmd = "curl -s --max-time 10 -o '" & sOut & "' -w '%{http_code}' " & sUrl & " > '" & sStatusFile & "'"

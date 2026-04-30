@@ -64,10 +64,14 @@ Sub AISuggestSelection()
 
         Dim sCmd As String
         If GetGUIType() = 1 Then
-            ' Windows: curl + status в отдельный файл
+            ' Windows: curl + status в отдельный файл.
+            ' ВАЖНО: на cmd.exe одинарный % внутри -w "%{http_code}" может
+            ' трактоваться как переменная окружения и сворачиваться в пустую
+            ' строку → ai_status.txt оказывается 0 байт. Удваиваем %% — cmd
+            ' пропустит его в curl как одинарный %, и код вернётся корректно.
             sCmd = "/c curl.exe -s --max-time " & CStr(nTimeout) & _
                    " -F ""text=@" & sT & """ -F ""context=@" & sC & """ " & _
-                   sUrl & " -o """ & sO & """ -w ""%{http_code}"" > """ & sS & """"
+                   sUrl & " -o """ & sO & """ -w ""%%{http_code}"" > """ & sS & """"
             Shell "cmd.exe", 1, sCmd, True
         Else
             ' Linux/macOS
@@ -92,10 +96,21 @@ Sub AISuggestSelection()
             GoTo NextServer
         End If
 
-        ' HTTP != 2xx → пробовать следующий сервер
+        ' HTTP != 2xx → пробовать следующий сервер.
+        ' Пустой sHttp намеренно НЕ трактуется как ошибка: если -w не записал
+        ' код (например, cmd.exe скушал %), то ответ всё равно валидируется
+        ' дальше через маркеры ===CORRECTED===/===END=== в ParseResponse —
+        ' невалидное тело отвалится там, валидное — успешно применится.
         If sHttp <> "" And Left(sHttp, 1) <> "2" Then
-            sLastErr = "Сервер " & sUrl & ": HTTP " & sHttp & " · " & Left(sRaw, 120)
-            GoTo NextServer
+            ' Если тело содержит валидные маркеры — это всё-таки успешный
+            ' ответ от сервера приложения (а 4xx/5xx «прилетел» от прокси
+            ' или иного промежуточного звена). Принимаем тело как есть.
+            If InStr(sRaw, SEP_CORR) > 0 And InStr(sRaw, SEP_END) > 0 Then
+                ' fallthrough — считаем успехом
+            Else
+                sLastErr = "Сервер " & sUrl & ": HTTP " & sHttp & " · " & Left(sRaw, 120)
+                GoTo NextServer
+            End If
         End If
 
         ' Сервер вернул маркер ошибки
