@@ -471,7 +471,11 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, _
     ' Геометрия
     Dim nW As Integer : nW = 340
     Dim nRowH As Integer : nRowH = 12
-    Dim nCBStartY As Integer : nCBStartY = 122
+    ' Y начала чекбоксов: после header(0..14) + diff-панелей(17..99) +
+    ' counter(102..111) + rules-label(114..123) + rules-panel(124..183).
+    Dim nCBStartY As Integer : nCBStartY = 190
+    Dim nRulesY As Integer : nRulesY = 124
+    Dim nRulesH As Integer : nRulesH = 60
 
     Dim nCols As Integer
     If nChanges <= 18 Then
@@ -543,18 +547,51 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, _
     End With
     oMdl.insertByName("t2", oT2)
 
-    ' Полоса со счётчиком — отдельной строкой над чекбоксами,
-    ' чтобы не пересекаться с кнопками внизу.
+    ' Полоса со счётчиком над панелью правил.
     Dim oCnt As Object : oCnt = oMdl.createInstance("com.sun.star.awt.UnoControlFixedTextModel")
     Dim sMode As String : sMode = IIf(Settings.GetUseTrackChanges(), " · режим Track Changes", "")
     With oCnt
         .PositionX = 6 : .PositionY = 102 : .Width = nW - 12 : .Height = 9
         .Label = "Найдено правок: " & CStr(nChanges) & sMode & _
-                 ". Клик по галочке — переключить."
+                 ". Снимите галочки внизу с тех правил, которые применять не нужно."
         .TextColor = RGB(80, 80, 80) : .FontHeight = 11
         .FontWeight = com.sun.star.awt.FontWeight.BOLD
     End With
     oMdl.insertByName("cnt", oCnt)
+
+    ' Заголовок панели правил.
+    Dim oLR As Object : oLR = oMdl.createInstance("com.sun.star.awt.UnoControlFixedTextModel")
+    With oLR
+        .PositionX = 6 : .PositionY = 114 : .Width = nW - 12 : .Height = 9
+        .Label = "  Все правила (полный текст без обрезки):"
+        .BackgroundColor = RGB(232, 232, 240) : .TextColor = RGB(40, 40, 90)
+        .FontWeight = com.sun.star.awt.FontWeight.BOLD : .FontHeight = 11
+    End With
+    oMdl.insertByName("lr", oLR)
+
+    ' Панель со ВСЕМИ правилами целиком — read-only multiline scrollable Edit.
+    ' Здесь пользователь читает обоснование каждой правки без обрезки.
+    ' Чекбоксы ниже — только переключают применение (компактные подписи).
+    Dim oTR As Object : oTR = oMdl.createInstance("com.sun.star.awt.UnoControlEditModel")
+    Dim sRules As String : sRules = ""
+    Dim ir As Integer
+    For ir = 0 To nChanges - 1
+        Dim sR As String : sR = aChanges(ir)
+        If sR = "" Then sR = "(пустая строка)"
+        ' Префикс с номером, если в строке его нет
+        If Len(sR) < 3 Or InStr(Left(sR, 4), ".") = 0 Then
+            sR = CStr(ir + 1) & ". " & sR
+        End If
+        If sRules <> "" Then sRules = sRules & Chr(10)
+        sRules = sRules & sR
+    Next ir
+    With oTR
+        .PositionX = 6 : .PositionY = nRulesY : .Width = nW - 12 : .Height = nRulesH
+        .MultiLine = True : .ReadOnly = True : .VScroll = True : .HScroll = False
+        .Text = sRules
+        .Border = 1 : .BackgroundColor = RGB(248, 248, 252) : .FontHeight = 11
+    End With
+    oMdl.insertByName("tr", oTR)
 
     ' Чекбоксы — по штуке на правку.
     Dim nColW As Integer : nColW = (nW - 12) \ nCols   ' ширина колонки
@@ -565,20 +602,19 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, _
 
         Dim sLine As String : sLine = aChanges(i)
         If sLine = "" Then sLine = "(пустая строка)"
-        ' Префикс с порядковым номером для удобства, если в строке нет своего
-        Dim sPrefix As String : sPrefix = ""
+        Dim sFull As String : sFull = sLine
         If Len(sLine) < 3 Or InStr(Left(sLine, 4), ".") = 0 Then
-            sPrefix = CStr(i + 1) & ". "
+            sFull = CStr(i + 1) & ". " & sLine
         End If
-        Dim sLabel As String : sLabel = sPrefix & sLine
-        ' Обрезаем подпись по реальной ёмкости колонки. Width у контрола
-        ' выставляется правильно, но на Windows LibreOffice CheckBox НЕ
-        ' клипует текст по своему Width — длинная подпись рендерится за
-        ' пределы контрола и уезжает за край диалога/окна. Поэтому режем
-        ' длину строки. ~5 dialog-units на символ при FontHeight=10,
-        ' ~14 единиц съедает сам бокс чекбокса слева.
+
+        ' Подпись чекбокса — короткий «отпечаток» правки для быстрой
+        ' визуальной идентификации. Полный текст пользователь читает
+        ' выше в панели «Все правила» и/или во всплывающей подсказке.
+        ' Жёсткий лимит — иначе на Windows LibreOffice длинный label
+        ' рендерится за пределы Width контрола и уезжает за край окна.
         Dim nMaxChars As Integer : nMaxChars = (nColW - 14) \ 5
         If nMaxChars < 8 Then nMaxChars = 8
+        Dim sLabel As String : sLabel = sFull
         If Len(sLabel) > nMaxChars Then sLabel = Left(sLabel, nMaxChars - 1) & "…"
 
         Dim oCB As Object : oCB = oMdl.createInstance("com.sun.star.awt.UnoControlCheckBoxModel")
@@ -587,6 +623,7 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, _
             .PositionY = nCBStartY + nRow * nRowH
             .Width = nColW - 2 : .Height = nRowH - 1
             .Label = sLabel
+            .HelpText = sFull         ' tooltip с полным текстом правила
             .State = 1                ' 0=unchecked, 1=checked, 2=undetermined
             .TriState = False
             .FontHeight = 10
