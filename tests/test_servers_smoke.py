@@ -228,6 +228,62 @@ def test_local_drops_changes_with_ellipsis_in_quotes(local_module):
     assert "Ошибок не найдено" not in out
 
 
+def test_local_drops_changes_with_hallucinated_before(local_module):
+    """Пункты, чьё «было» не является подстрокой raw_text — галлюцинации
+    модели. Сервер их дропает на финальном этапе."""
+    raw_text = (
+        "Главным управлением собственной безопасности проверяется "
+        "информация о противоправных действиях."
+    )
+    response = (
+        "===CORRECTED===\n"
+        "Главным управлением собственной безопасности проверяется информация о противоправных действиях.\n"
+        "===CHANGES===\n"
+        "1. «безопасностей» → «безопасности» | падеж\n"
+        "2. «противоправных» → «правонарушительных» | синонимы\n"
+        "3. «информация о» → «информация про» | предлог\n"
+        "===END==="
+    )
+    out = local_module._drop_changes_not_in_text(response, raw_text)
+    # Пункт 1: «безопасностей» нет в raw_text — выкидывается
+    assert "безопасностей" not in out
+    # Пункт 2: «противоправных» есть в raw_text — остаётся (даже если правка спорная)
+    assert "противоправных" in out
+    # Пункт 3: «информация о» есть в raw_text — остаётся
+    assert "информация о" in out
+    # Заглушка НЕ подставлена (есть содержательные пункты)
+    assert "Ошибок не найдено" not in out
+
+
+def test_local_drops_all_hallucinated_uses_fallback(local_module):
+    """Если ВСЕ пункты галлюцинированные — подставляется заглушка."""
+    raw_text = "Простой короткий текст без ошибок."
+    response = (
+        "===CORRECTED===\n"
+        "Простой короткий текст без ошибок.\n"
+        "===CHANGES===\n"
+        "1. «несуществующее слово» → «другое» | замена\n"
+        "2. «ещё одна выдумка» → «правильно» | замена\n"
+        "===END==="
+    )
+    out = local_module._drop_changes_not_in_text(response, raw_text)
+    assert "Ошибок не найдено" in out
+    assert "===END===" in out
+
+
+def test_local_passes_through_when_raw_text_empty(local_module):
+    """Если raw_text пуст — фильтр выключен (не ломаем тесты с моком)."""
+    response = (
+        "===CORRECTED===\n"
+        "текст\n"
+        "===CHANGES===\n"
+        "1. «X» → «Y» | замена\n"
+        "===END==="
+    )
+    out = local_module._drop_changes_not_in_text(response, "")
+    assert "«X» → «Y»" in out
+
+
 def test_local_strip_thinking_preserves_non_thinking(local_module):
     """Если в ответе нет ни <think>, ни ===CORRECTED=== — возвращаем как есть."""
     raw = "ПроизвольныйТекстБезМаркеров"
