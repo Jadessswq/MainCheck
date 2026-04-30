@@ -7,6 +7,11 @@ Const SEP_CORR    As String = "===CORRECTED==="
 Const SEP_CHANGES As String = "===CHANGES==="
 Const SEP_END     As String = "===END==="
 
+' Связь «nIdx кнопки ?» → «text правила» для ActionListener’а.
+' Listener вызывается вне ShowDiffDialog, поэтому расписываем
+' тексты в module-level массив.
+Public g_aRuleTexts() As String
+
 ' ═══════════════════════════════════════════════════
 '  ТОЧКА ВХОДА
 ' ═══════════════════════════════════════════════════
@@ -471,11 +476,7 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, _
     ' Геометрия
     Dim nW As Integer : nW = 340
     Dim nRowH As Integer : nRowH = 12
-    ' Y начала чекбоксов: после header(0..14) + diff-панелей(17..99) +
-    ' counter(102..111) + rules-label(114..123) + rules-panel(124..183).
-    Dim nCBStartY As Integer : nCBStartY = 190
-    Dim nRulesY As Integer : nRulesY = 124
-    Dim nRulesH As Integer : nRulesH = 60
+    Dim nCBStartY As Integer : nCBStartY = 122
 
     Dim nCols As Integer
     If nChanges <= 18 Then
@@ -553,48 +554,20 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, _
     With oCnt
         .PositionX = 6 : .PositionY = 102 : .Width = nW - 12 : .Height = 9
         .Label = "Найдено правок: " & CStr(nChanges) & sMode & _
-                 ". Снимите галочки внизу с тех правил, которые применять не нужно."
+                 ". Нажмите «?» рядом с галочкой, чтобы прочитать пояснение."
         .TextColor = RGB(80, 80, 80) : .FontHeight = 11
         .FontWeight = com.sun.star.awt.FontWeight.BOLD
     End With
     oMdl.insertByName("cnt", oCnt)
 
-    ' Заголовок панели правил.
-    Dim oLR As Object : oLR = oMdl.createInstance("com.sun.star.awt.UnoControlFixedTextModel")
-    With oLR
-        .PositionX = 6 : .PositionY = 114 : .Width = nW - 12 : .Height = 9
-        .Label = "  Все правила (полный текст без обрезки):"
-        .BackgroundColor = RGB(232, 232, 240) : .TextColor = RGB(40, 40, 90)
-        .FontWeight = com.sun.star.awt.FontWeight.BOLD : .FontHeight = 11
-    End With
-    oMdl.insertByName("lr", oLR)
+    ' Чекбоксы — по штуке на правку; рядом с каждым — кнопка «?» с пояснением.
+    ' Полный текст каждого правила складываем в g_aRuleTexts(),
+    ' чтобы ActionListener мог до него дотянуться вне скоупа функции.
+    ReDim g_aRuleTexts(nChanges - 1)
 
-    ' Панель со ВСЕМИ правилами целиком — read-only multiline scrollable Edit.
-    ' Здесь пользователь читает обоснование каждой правки без обрезки.
-    ' Чекбоксы ниже — только переключают применение (компактные подписи).
-    Dim oTR As Object : oTR = oMdl.createInstance("com.sun.star.awt.UnoControlEditModel")
-    Dim sRules As String : sRules = ""
-    Dim ir As Integer
-    For ir = 0 To nChanges - 1
-        Dim sR As String : sR = aChanges(ir)
-        If sR = "" Then sR = "(пустая строка)"
-        ' Префикс с номером, если в строке его нет
-        If Len(sR) < 3 Or InStr(Left(sR, 4), ".") = 0 Then
-            sR = CStr(ir + 1) & ". " & sR
-        End If
-        If sRules <> "" Then sRules = sRules & Chr(10)
-        sRules = sRules & sR
-    Next ir
-    With oTR
-        .PositionX = 6 : .PositionY = nRulesY : .Width = nW - 12 : .Height = nRulesH
-        .MultiLine = True : .ReadOnly = True : .VScroll = True : .HScroll = False
-        .Text = sRules
-        .Border = 1 : .BackgroundColor = RGB(248, 248, 252) : .FontHeight = 11
-    End With
-    oMdl.insertByName("tr", oTR)
-
-    ' Чекбоксы — по штуке на правку.
-    Dim nColW As Integer : nColW = (nW - 12) \ nCols   ' ширина колонки
+    Dim nColW As Integer : nColW = (nW - 12) \ nCols     ' ширина колонки
+    Dim nHelpW As Integer : nHelpW = 12                  ' кнопка ? справа
+    Dim nCBW As Integer : nCBW = nColW - nHelpW - 2      ' чекбокс перед ней
     Dim i As Integer
     For i = 0 To nChanges - 1
         Dim nCol As Integer : nCol = i Mod nCols
@@ -606,13 +579,13 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, _
         If Len(sLine) < 3 Or InStr(Left(sLine, 4), ".") = 0 Then
             sFull = CStr(i + 1) & ". " & sLine
         End If
+        g_aRuleTexts(i) = sFull
 
-        ' Подпись чекбокса — короткий «отпечаток» правки для быстрой
-        ' визуальной идентификации. Полный текст пользователь читает
-        ' выше в панели «Все правила» и/или во всплывающей подсказке.
-        ' Жёсткий лимит — иначе на Windows LibreOffice длинный label
-        ' рендерится за пределы Width контрола и уезжает за край окна.
-        Dim nMaxChars As Integer : nMaxChars = (nColW - 14) \ 5
+        ' Подпись чекбокса — короткий «отпечаток» правки. Полный
+        ' текст открывается кликом по «?» или в тултипе на неё.
+        ' Обрезаем по реальной ёмкости колонки — иначе на Windows
+        ' LibreOffice длинный label рендерится за пределы Width.
+        Dim nMaxChars As Integer : nMaxChars = (nCBW - 14) \ 5
         If nMaxChars < 8 Then nMaxChars = 8
         Dim sLabel As String : sLabel = sFull
         If Len(sLabel) > nMaxChars Then sLabel = Left(sLabel, nMaxChars - 1) & "…"
@@ -621,14 +594,29 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, _
         With oCB
             .PositionX = 6 + nCol * nColW
             .PositionY = nCBStartY + nRow * nRowH
-            .Width = nColW - 2 : .Height = nRowH - 1
+            .Width = nCBW : .Height = nRowH - 1
             .Label = sLabel
-            .HelpText = sFull         ' tooltip с полным текстом правила
-            .State = 1                ' 0=unchecked, 1=checked, 2=undetermined
+            .HelpText = sFull
+            .State = 1
             .TriState = False
             .FontHeight = 10
         End With
         oMdl.insertByName("cb_" & i, oCB)
+
+        ' Кнопка «?» справа от чекбокса.
+        Dim oHB As Object : oHB = oMdl.createInstance("com.sun.star.awt.UnoControlButtonModel")
+        With oHB
+            .PositionX = 6 + nCol * nColW + nCBW + 1
+            .PositionY = nCBStartY + nRow * nRowH
+            .Width = nHelpW : .Height = nRowH - 1
+            .Label = "?"
+            .HelpText = sFull
+            .FontHeight = 9
+            .BackgroundColor = RGB(220, 230, 250)
+            .TextColor = RGB(40, 60, 120)
+            .FontWeight = com.sun.star.awt.FontWeight.BOLD
+        End With
+        oMdl.insertByName("hb_" & i, oHB)
     Next i
 
     ' Кнопки — внизу, сразу под полем чекбоксов
@@ -654,6 +642,17 @@ Function ShowDiffDialog(sBeforePanel As String, sAfterPanel As String, _
     oDlg.setModel(oMdl)
     Dim oTk As Object : oTk = CreateUnoService("com.sun.star.awt.Toolkit")
     oDlg.createPeer(oTk, StarDesktop.getCurrentFrame().getContainerWindow())
+
+    ' Подписываемся на клики по кнопкам «?» — по клику покажем
+    ' MsgBox с полным текстом правила (из g_aRuleTexts по индексу
+    ' из имени контрола «hb_<i>»).
+    Dim oHelpListener As Object
+    oHelpListener = createUnoListener("HelpBtn_", "com.sun.star.awt.XActionListener")
+    Dim k As Integer
+    For k = 0 To nChanges - 1
+        oDlg.getControl("hb_" & k).addActionListener(oHelpListener)
+    Next k
+
     Dim nRes As Integer : nRes = oDlg.execute()
 
     ' Если пользователь нажал OK — забираем State каждого CheckBox.
@@ -692,5 +691,27 @@ Function ReadUTF8(sPath As String) As String
     Do While Not oIn.isEOF() : r = r & oIn.readLine() & Chr(10) : Loop
     oIn.closeInput() : ReadUTF8 = r
 End Function
+
+
+' ═══════════════════════════════════════════════════
+'  ActionListener для кнопок «?» в диалоге
+' ═══════════════════════════════════════════════════
+' XActionListener → два метода: actionPerformed + disposing.
+' createUnoListener("HelpBtn_", "...XActionListener") вызывает Sub'ы
+' с префиксом HelpBtn_ на эти события.
+Sub HelpBtn_actionPerformed(oEvt As Object)
+    On Error Resume Next
+    Dim sName As String : sName = oEvt.Source.Model.Name   ' ожидаем "hb_<idx>"
+    If Left(sName, 3) <> "hb_" Then Exit Sub
+    Dim nIdx As Integer : nIdx = CInt(Mid(sName, 4))
+    If nIdx < 0 Then Exit Sub
+    If nIdx > UBound(g_aRuleTexts) Then Exit Sub
+    MsgBox g_aRuleTexts(nIdx), 64, "AI Suggester — правило"
+End Sub
+
+Sub HelpBtn_disposing(oEvt As Object)
+    ' Пусто— отписки от listener'а делать не нужно: диалог и все
+    ' его контролы dispose'ятся вместе при выходе из ShowDiffDialog.
+End Sub
 
 ]]></script:module>
