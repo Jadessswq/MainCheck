@@ -86,9 +86,16 @@ Sub AISuggestSelection()
             Shell "/bin/sh", 1, "-c " & Chr(34) & sCmd & Chr(34), True
         End If
 
-        ' Проверка HTTP-статуса
+        ' Проверка HTTP-статуса.
+        ' StarBasic Trim() не убирает CR/LF/табы/BOM, а ReadUTF8 всегда
+        ' дописывает Chr(10) после readLine. На некоторых сборках Windows
+        ' curl кладёт в файл BOM или \r\n, и обычный Trim оставляет в
+        ' sHttp невидимые символы — Left(sHttp, 1) тогда возвращает CR/BOM,
+        ' условие "не 2xx" срабатывает на самом деле успешном 200-OK ответе
+        ' и пользователь видит «Все серверы недоступны» на полностью
+        ' валидном ответе от сервера. ExtractDigits отсеивает всё нецифровое.
         Dim sHttp As String : sHttp = ""
-        If FileExists(sS) Then sHttp = Trim(ReadUTF8(sS))
+        If FileExists(sS) Then sHttp = ExtractDigits(ReadUTF8(sS))
 
         If Not FileExists(sO) Then
             sLastErr = "Сервер " & sUrl & ": нет ответа (таймаут/сеть)"
@@ -107,10 +114,14 @@ Sub AISuggestSelection()
         ' дальше через маркеры ===CORRECTED===/===END=== в ParseResponse —
         ' невалидное тело отвалится там, валидное — успешно применится.
         If sHttp <> "" And Left(sHttp, 1) <> "2" Then
-            ' Если тело содержит валидные маркеры — это всё-таки успешный
-            ' ответ от сервера приложения (а 4xx/5xx «прилетел» от прокси
-            ' или иного промежуточного звена). Принимаем тело как есть.
-            If InStr(sRaw, SEP_CORR) > 0 And InStr(sRaw, SEP_END) > 0 Then
+            ' Если тело содержит маркер ===CORRECTED=== — это всё-таки
+            ' успешный ответ от сервера приложения (а 4xx/5xx «прилетел»
+            ' от прокси или иного промежуточного звена). Принимаем тело
+            ' как есть. ===END=== не проверяем — некоторые модели его
+            ' иногда не дописывают, а сервер с v1.5.8 гарантированно
+            ' добавляет ===END=== в хвост. Ниже по коду ParseResponse
+            ' валидирует структуру ещё раз.
+            If InStr(sRaw, SEP_CORR) > 0 Then
                 ' fallthrough — считаем успехом
             Else
                 sLastErr = "Сервер " & sUrl & ": HTTP " & sHttp & " · " & Left(sRaw, 120)
@@ -682,6 +693,21 @@ Sub WriteUTF8(sPath As String, sText As String)
     oOut.setOutputStream(oPipe) : oOut.setEncoding("UTF-8") : oOut.writeString(sText) : oOut.closeOutput()
     oSFA.writeFile(ConvertToURL(sPath), oPipe)
 End Sub
+
+' Достаёт только цифровые символы из строки, отсекая BOM, CR, LF,
+' пробелы и любой служебный мусор, который StarBasic Trim() не убирает.
+' Используется для парсинга HTTP-кода из ai_status.txt: curl -w "%{http_code}"
+' на разных платформах может вернуть либо "200", либо "200\r\n", либо
+' "\xEF\xBB\xBF200" (BOM-байты), либо вообще пустой файл.
+Function ExtractDigits(s As String) As String
+    Dim r As String : r = ""
+    Dim i As Integer
+    For i = 1 To Len(s)
+        Dim ch As String : ch = Mid(s, i, 1)
+        If ch >= "0" And ch <= "9" Then r = r & ch
+    Next i
+    ExtractDigits = r
+End Function
 
 Function ReadUTF8(sPath As String) As String
     Dim oSFA As Object : oSFA = CreateUnoService("com.sun.star.ucb.SimpleFileAccess")
