@@ -6,6 +6,7 @@
 import importlib
 import io
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -282,6 +283,143 @@ def test_local_passes_through_when_raw_text_empty(local_module):
     )
     out = local_module._drop_changes_not_in_text(response, "")
     assert "«X» → «Y»" in out
+
+
+def test_local_rebuild_changes_from_diff_punctuation(local_module):
+    """Если модель добавила запятые в CORRECTED, но не отрапортовала —
+    сервер должен сгенерировать пункты CHANGES из diff. Реальный кейс
+    с yandex-corrector на Росгвардии."""
+    raw = "в ходе выполнения задач по обеспечению собственной безопасности"
+    corrected = "в ходе выполнения задач, по обеспечению собственной безопасности"
+    entries = local_module._rebuild_changes_from_diff(raw, corrected)
+    assert len(entries) == 1
+    # «было» содержит исходник с контекстом ±1 слово вокруг запятой
+    assert "задач" in entries[0] and "по" in entries[0]
+    # «стало» содержит запятую
+    assert "задач," in entries[0]
+    # «было» — substring исходника (инвариант для клиента)
+    before = entries[0].split("»")[0].lstrip("«")
+    assert before in raw
+
+
+def test_local_rebuild_changes_skips_when_equal(local_module):
+    """Если raw_text и corrected совпадают — entries пуст."""
+    raw = "Текст без правок."
+    entries = local_module._rebuild_changes_from_diff(raw, raw)
+    assert entries == []
+
+
+def test_local_rebuild_changes_handles_multiple_punctuation_fixes(local_module):
+    """Несколько добавленных запятых в разных местах → несколько пунктов."""
+    raw = "А именно отдел подготовил отчёт но никто не стал его читать"
+    corrected = "А именно, отдел подготовил отчёт, но никто не стал его читать"
+    entries = local_module._rebuild_changes_from_diff(raw, corrected)
+    # Минимум 2 пункта (две запятые в разных местах)
+    assert len(entries) >= 2
+    # Все «было» — substring исходника
+    for entry in entries:
+        before = entry.split("»")[0].lstrip("«")
+        assert before in raw, f"Пункт {entry!r}: «{before}» нет в raw_text"
+
+
+def test_local_has_real_change_items(local_module):
+    """Заглушка «Ошибок не найдено» не считается содержательным пунктом."""
+    stub = (
+        "===CORRECTED===\n"
+        "текст\n"
+        "===CHANGES===\n"
+        "1. Ошибок не найдено. Текст соответствует нормам.\n"
+        "===END==="
+    )
+    assert local_module._has_real_change_items(stub) is False
+
+    real = (
+        "===CORRECTED===\n"
+        "текст\n"
+        "===CHANGES===\n"
+        "1. «X» → «Y» | замена\n"
+        "===END==="
+    )
+    assert local_module._has_real_change_items(real) is True
+
+
+def test_local_extract_corrected_body(local_module):
+    """Извлекаем тело CORRECTED без посторонних маркеров."""
+    text = (
+        "===CORRECTED===\n"
+        "Главным управлением проверяется информация.\n"
+        "===CHANGES===\n"
+        "1. дроп\n"
+        "===END==="
+    )
+    body = local_module._extract_corrected_body(text)
+    assert body == "Главным управлением проверяется информация."
+
+
+def test_local_suggest_reconstructs_changes_when_model_lies(local_module, monkeypatch):
+    """Интеграция: модель отдаёт правильный CORRECTED (с новыми запятыми),
+    но в CHANGES выдумывает «безопасностей» (которого в тексте нет). После
+    `_drop_changes_not_in_text` пункт выкидывается. Сервер должен реконструировать
+    CHANGES из diff(raw_text, CORRECTED) и отдать клиенту валидный список."""
+    from fastapi.testclient import TestClient
+
+    raw_input = (
+        "Главным управлением собственной безопасности Федеральной службы "
+        "в ходе выполнения задач по обеспечению собственной безопасности "
+        "проверяется информация о противоправных действиях."
+    )
+
+    async def fake_call_ollama(messages):
+        # Модель добавила запятые (правильно) НО в CHANGES выдумала пункт
+        return (
+            "===CORRECTED===\n"
+            "Главным управлением собственной безопасности Федеральной службы, "
+            "в ходе выполнения задач, по обеспечению собственной безопасности "
+            "проверяется информация о противоправных действиях.\n"
+            "===CHANGES===\n"
+            "1. «безопасностей» → «безопасности» | ошибка в окончании слова\n"
+            "===END==="
+        )
+
+    monkeypatch.setattr(local_module, "call_ollama", fake_call_ollama)
+    client = TestClient(local_module.app)
+    files = {
+        "text": ("t.txt", io.BytesIO(raw_input.encode("utf-8")), "text/plain"),
+        "context": ("c.txt", io.BytesIO(b""), "text/plain"),
+    }
+    r = client.post("/suggest", files=files)
+    assert r.status_code == 200
+    body = r.text
+    # Галлюцинированный пункт «безопасностей» дропнут
+    assert "«безопасностей»" not in body
+    # «Ошибок не найдено» НЕ должно появиться: сервер реконструировал из diff
+    assert "Ошибок не найдено" not in body
+    # Реконструированные пункты появились (хотя бы один с автоправкой)
+    assert "автоправка по diff" in body
+    # Клиентский InStr найдёт хотя бы один из реконструированных «было»
+    # в исходнике (это инвариант — берём substring raw_input)
+    pairs = re.findall(r"«([^»]+)»\s*→", body)
+    assert pairs, "Должны быть реконструированные пункты"
+    found_at_least_one = any(p in raw_input for p in pairs)
+    assert found_at_least_one, f"Ни одно «было» не найдено в raw_input: {pairs}"
+
+
+def test_local_replace_changes_block_with_rebuilt_entries(local_module):
+    """После реконструкции CHANGES целиком заменён, рамки целы."""
+    text = (
+        "===CORRECTED===\n"
+        "новый текст\n"
+        "===CHANGES===\n"
+        "1. Ошибок не найдено. Текст соответствует нормам.\n"
+        "===END==="
+    )
+    entries = ["«старое слово» → «новое слово» | автоправка"]
+    out = local_module._replace_changes_block(text, entries)
+    assert "===CORRECTED===" in out
+    assert "новый текст" in out
+    assert "1. «старое слово» → «новое слово»" in out
+    assert "Ошибок не найдено" not in out
+    assert out.endswith("===END===")
 
 
 def test_local_strip_thinking_preserves_non_thinking(local_module):
